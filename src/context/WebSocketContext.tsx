@@ -35,19 +35,19 @@ export const WebSocketProvider = () => {
 
         console.log("Websocket Provider Mounted")
 
-        console.log("🔄 WebSocket effect running", {
+        console.log("WebSocket effect running", {
             loading,
             hasUser: !!user,
             userId: user?.user_id
         });
 
         if (loading) {
-            console.log("⏳ Still loading auth, waiting...");
+            console.log("Still loading auth, waiting...");
             return;
         }
 
         if (!user?.user_id) {
-            console.log("❌ No user ID available");
+            console.log("No user ID available");
             return;
         }
 
@@ -86,12 +86,12 @@ export const WebSocketProvider = () => {
         });
 
         newSocket.on('connect_error', (error) => {
-            console.log('❌ Connection error:', error.message);
+            console.log('Connection error:', error.message);
             setIsConnected(false);
         });
 
         newSocket.on('CANCEL_UPDATE', (data) => {
-            console.log('📨 Received message from server:', data);
+            console.log('Received message from server:', data);
 
             // set user orders - delete cancelled order in client memory on success,
             // update available cash (?) right now portfolio just shows total cash, should make it show available instead 
@@ -124,7 +124,7 @@ export const WebSocketProvider = () => {
 
     const subscribeToTicker = useCallback((ticker: Ticker) => {
         if (socket) {
-            console.log('🔔 Context subscribing to:', ticker);
+            console.log('Context subscribing to:', ticker);
             socket.emit('subscribe', ticker);
         }
     }, [socket]);
