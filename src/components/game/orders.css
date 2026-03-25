@@ -1,0 +1,160 @@
+.orders-container {
+    background: #0f172a;
+    min-height: 100vh;
+    height: 100vh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+.top-nav {
+    height: 60px;
+    display: flex;
+    align-items: center;
+    padding: 0 2rem;
+    background: #020617;
+    border-bottom: 1px solid #1e293b;
+    width: 100%;
+    flex-shrink: 0;
+}
+
+.title {
+    font-size: 1.5rem;
+    color: #e5e7eb;
+    margin-right: auto;
+}
+
+.top-nav a, .top-nav button {
+    margin-left: 1rem;
+    color: #e5e7eb;
+    text-decoration: none;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1rem;
+}
+
+.top-nav a:hover, .top-nav button:hover {
+    color: #3b82f6;
+}
+
+.open-orders {
+    padding: 2rem;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    color: #e2e8f0;
+}
+
+.open-orders h2 {
+    margin-bottom: 1.5rem;
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: #f1f5f9;
+    flex-shrink: 0;
+}
+
+.table-container {
+    flex: 1;
+    overflow-y: auto;
+    border-radius: 12px;
+    background: #1e293b;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+.open-orders table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.open-orders thead {
+    background: #334155;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.open-orders th {
+    text-align: left;
+    padding: 1rem;
+    font-weight: 600;
+    font-size: 0.875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #94a3b8;
+}
+
+.open-orders td {
+    padding: 1rem;
+    border-bottom: 1px solid #334155;
+    font-size: 0.95rem;
+}
+
+.open-orders tbody tr:hover {
+    background: #2d3b4f;
+    transition: background 0.2s ease;
+}
+
+.buy {
+    color: #10b981;
+    font-weight: 600;
+}
+
+.sell {
+    color: #ef4444;
+    font-weight: 600;
+}
+
+.cancel-btn {
+    background: transparent;
+    border: 1px solid #ef4444;
+    color: #ef4444;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.cancel-btn:hover {
+    background: #ef4444;
+    color: white;
+}
+
+.cancel-btn:active {
+    transform: translateY(1px);
+}
+
+.open-orders td:nth-child(4) {
+    color: #94a3b8;
+    font-style: italic;
+}
+
+.open-orders > p {
+    text-align: center;
+    padding: 4rem;
+    background: #1e293b;
+    border-radius: 12px;
+    color: #94a3b8;
+    font-size: 1.1rem;
+}
+
+@media (max-width: 768px) {
+    .open-orders {
+        padding: 1rem;
+    }
+    
+    .table-container {
+        overflow-x: auto;
+    }
+    
+    .open-orders table {
+        min-width: 800px;
+    }
+    
+    .cancel-btn {
+        padding: 0.4rem 0.8rem;
+        font-size: 0.8rem;
+    }
+}

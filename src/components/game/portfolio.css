@@ -1,0 +1,148 @@
+.portfolio-content {
+    flex: 1;
+    padding: 2rem;
+    overflow-y: auto;
+    background: #0f172a;
+}
+
+.portfolio-summary {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.headlines-banner {
+  height: 60px;
+  width: 50%;
+  margin: 0.25rem auto;
+  margin-bottom: .5rem;
+  background: #020617;
+  border-bottom: 1px solid #1e293b;
+  border-top: 1px solid #1e293b;
+  display: flex;
+  align-items: center;
+  padding: 0 2rem;
+  flex-shrink: 0;
+}
+
+
+.summary-card {
+    background: #020617;
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    padding: 1.5rem;
+}
+
+.summary-label {
+    color: #94a3b8;
+    font-size: 0.875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 0.5rem;
+}
+
+.summary-value {
+    color: #e5e7eb;
+    font-size: 1.5rem;
+    font-weight: bold;
+}
+
+.summary-card.positive .summary-value {
+    color: #22c55e;
+}
+
+.summary-card.negative .summary-value {
+    color: #ef4444;
+}
+
+.percent {
+    font-size: 0.875rem;
+    margin-left: 0.5rem;
+    opacity: 0.8;
+}
+
+.holdings-table-container {
+    background: #020617;
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    padding: 1.5rem;
+}
+
+.holdings-table-container h2 {
+    color: #e5e7eb;
+    font-size: 1.25rem;
+    margin-bottom: 1.5rem;
+}
+
+.holdings-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.holdings-table th {
+    text-align: left;
+    padding: 0.75rem;
+    color: #94a3b8;
+    font-size: 0.875rem;
+    font-weight: 500;
+    border-bottom: 1px solid #1e293b;
+}
+
+.holdings-table td {
+    padding: 1rem 0.75rem;
+    color: #e5e7eb;
+    border-bottom: 1px solid #1e293b;
+}
+
+.holdings-table tr:last-child td {
+    border-bottom: none;
+}
+
+.ticker-cell {
+    font-weight: bold;
+    color: #22c55e;
+}
+
+.holdings-table .positive {
+    color: #22c55e;
+}
+
+.holdings-table .negative {
+    color: #ef4444;
+}
+
+.trade-link {
+    color: #3b82f6;
+    text-decoration: none;
+    font-size: 0.875rem;
+}
+
+.trade-link:hover {
+    text-decoration: underline;
+}
+
+.no-holdings {
+    text-align: center;
+    color: #94a3b8;
+    padding: 3rem !important;
+}
+
+.no-holdings a {
+    color: #3b82f6;
+    text-decoration: none;
+    margin-left: 0.5rem;
+}
+
+.no-holdings a:hover {
+    text-decoration: underline;
+}
+
+.portfolio-loading {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #94a3b8;
+    font-size: 1.125rem;
+}

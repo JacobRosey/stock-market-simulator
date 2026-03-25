@@ -1,0 +1,165 @@
+.order-book {
+  background: #1e1e1e;
+  border-radius: 8px;
+  padding: 20px;
+  color: #fff;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.order-book-header h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.order-book-asks,
+.order-book-bids {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.order-book-headers {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 4px 0;
+  color: #6b7280;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  border-bottom: 1px solid #2d2d2d;
+  margin-bottom: 4px;
+}
+
+.order-book-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 2px 0;
+  font-size: 0.875rem;
+  font-family: monospace;
+}
+
+.order-book-asks .price {
+  color: #ef4444;
+}
+
+.order-book-bids .price {
+  color: #22c55e;
+}
+
+.order-book-spread {
+  text-align: center;
+  padding: 8px;
+  background: #2d2d2d;
+  border-radius: 4px;
+  margin: 8px 0;
+  font-size: 0.875rem;
+  color: #9ca3af;
+}
+
+.trading-form {
+  border-top: 1px solid #2d2d2d;
+  padding-top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.order-type-selector {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.type-btn {
+  padding: 8px;
+  background: #2d2d2d;
+  border: 1px solid #404040;
+  color: #9ca3af;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: all 0.2s;
+}
+
+.type-btn.active {
+  background: #3b3b3b;
+  color: #fff;
+  border-color: #22c55e;
+}
+
+.input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.input-group label {
+  font-size: 0.75rem;
+  color: #9ca3af;
+  text-transform: uppercase;
+}
+
+.input-group input {
+  padding: 10px;
+  background: #2d2d2d;
+  border: 1px solid #404040;
+  color: #fff;
+  border-radius: 4px;
+  font-size: 0.875rem;
+  font-family: monospace;
+}
+
+.input-group input:focus {
+  outline: none;
+  border-color: #22c55e;
+}
+
+.input-group input::placeholder {
+  color: #6b7280;
+}
+
+.order-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.buy-btn,
+.sell-btn {
+  padding: 12px;
+  border: none;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.buy-btn {
+  background: #22c55e;
+  color: #fff;
+}
+
+.sell-btn {
+  background: #ef4444;
+  color: #fff;
+}
+
+.buy-btn:hover,
+.sell-btn:hover {
+  opacity: 0.9;
+}
+
+.order-total {
+  text-align: right;
+  font-size: 0.875rem;
+  color: #9ca3af;
+  font-family: monospace;
+  padding-top: 8px;
+}
