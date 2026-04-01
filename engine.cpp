@@ -170,7 +170,7 @@ private:
     static constexpr size_t DEPTH = 3; // adjust if more level visibility needed
 
     template <typename MapType>
-    void updateLevel(MapType &levels, uint64_t price, uint64_t delta)
+    void updateLevel(MapType &levels, uint64_t price, int64_t delta) // Delta was unsigned initially which caused wraparound when removing depth from level 
     {
         auto it = levels.find(price);
         if (it != levels.end())
@@ -181,12 +181,11 @@ private:
                 levels.erase(it);
             }
         }
+        // If no depth exists and delta is positive - set depth
         else if (delta > 0)
         {
             levels[price] = delta;
         }
-        auto result = levels.find(price);
-        uint64_t resultQty = (result != levels.end()) ? result->second : 0.0;
     }
 
 public:
@@ -233,7 +232,7 @@ public:
     void eraseLimitBid(std::set<Order, Order::CompareBids>::iterator it)
     {
         uint64_t orderId = it->orderId;
-        updateLevel(bidLevels, it->price.value(), -(uint64_t)it->remainingQuantity);
+        updateLevel(bidLevels, it->price.value(), -(int64_t)it->remainingQuantity);
         limitBids.erase(it);
         bidIdToIterator.erase(orderId);
     }
@@ -241,7 +240,7 @@ public:
     void eraseLimitAsk(std::set<Order, Order::CompareAsks>::iterator it)
     {
         uint64_t orderId = it->orderId;
-        updateLevel(askLevels, it->price.value(), -(uint64_t)it->remainingQuantity);
+        updateLevel(askLevels, it->price.value(), -(int64_t)it->remainingQuantity);
         limitAsks.erase(it);
         askIdToIterator.erase(orderId);
     }
@@ -395,17 +394,17 @@ public:
     }
 
     void publishDepthForTicker(Redis &r, const std::string &ticker, const DepthSnapshot &snap, const std::unordered_map<std::string, uint64_t> &tickerPrices)
-    {
-
+    {                  
         json j;
         auto it = tickerPrices.find(ticker);
-        j["lastPrice"] = (it != tickerPrices.end()) ? it->second : 0.0;
+        j["lastPrice"] = (it != tickerPrices.end()) ? it->second  : 0.0;
 
-        for (auto it = snap.topAsks.rbegin(); it != snap.topAsks.rend(); ++it)
-            j["asks"].push_back({{"price", it->price}, {"qty", it->totalQty}});
+        for (auto it = snap.topAsks.rbegin(); it != snap.topAsks.rend(); ++it){
+            j["asks"].push_back({{"price", it->price }, {"qty", it->totalQty }});
+        }
 
         for (auto &l : snap.topBids)
-            j["bids"].push_back({{"price", l.price}, {"qty", l.totalQty}});
+            j["bids"].push_back({{"price", l.price  }, {"qty", l.totalQty  }});
 
         std::string channel = "orders:depth:" + ticker;
         std::string message = j.dump();
@@ -438,6 +437,7 @@ public:
 
         {
             std::lock_guard<std::mutex> lock(mutex);
+            
             if (order.side == Side::BUY)
             {
                 book.addBid(order);
@@ -586,6 +586,9 @@ public:
             bid.remainingQuantity, ask.remainingQuantity,
             bid.ticker, fillQty, fillPrice);
 
+        // Erase and place back if not filled so depth map is updated 
+        // Probably better to just manually call the updateLevels function and 
+        // leave the orders in the book if they still have quantity to fill
         book.eraseLimitBid(bidIt);
         book.eraseLimitAsk(askIt);
 
@@ -610,8 +613,12 @@ public:
                 auto askIt = book.getLimitAsks().begin();
 
                 // No price cross, done
-                if (bidIt->price.value() < askIt->price.value())
+                if (bidIt->price.value() < askIt->price.value()){
+                    if(ticker == "NEXUS"){
+                        std::cout << "Could not match any orders for " << ticker << ". ask price: "  << askIt->price.value() << "bid price: " << bidIt->price.value()  << std::endl;
+                    }
                     break;
+                }
 
                 // Prevent self-trade: walk the newer side to find valid counterparty
                 if (bidIt->userId == askIt->userId)
@@ -623,8 +630,9 @@ public:
                         {
                             ++askIt;
                         }
-                        if (askIt == book.getLimitAsks().end() || askIt->price.value() > bidIt->price.value())
+                        if (askIt == book.getLimitAsks().end() || askIt->price.value() > bidIt->price.value()){
                             break;
+                        }
                     }
                     else
                     {
@@ -633,8 +641,9 @@ public:
                         {
                             ++bidIt;
                         }
-                        if (bidIt == book.getLimitBids().end() || bidIt->price.value() < askIt->price.value())
+                        if (bidIt == book.getLimitBids().end() || bidIt->price.value() < askIt->price.value()){
                             break;
+                        }
                     }
                 }
                 matchWithIterators(book, bidIt, askIt, filledOrders);
@@ -642,6 +651,7 @@ public:
         }
         enqueueFills(filledOrders);
     }
+
     void matchMarketOrders()
     {
         for (int i = 0; i < std::size(TICKERS); i++)
@@ -730,7 +740,7 @@ namespace OrderUtils
             auto j = json::parse(value);
 
             std::string orderType = j["type"].get<std::string>();
-            // Separate by type
+            
             if (orderType == "LIMIT")
             {
                 limitOrders++;
@@ -740,6 +750,7 @@ namespace OrderUtils
                 marketOrders++;
             }
             // other order types here - not strictly necessary, just for counting each type recovered
+
             addOrderToBook(engine, j);
         }
 
@@ -763,7 +774,7 @@ int main()
                                  {
         try {
             Redis redis("tcp://127.0.0.1:6379");
-            std::this_thread::sleep_for(std::chrono::seconds(3)); // just a hacky way to wait for redis to contain recovered orders
+            std::this_thread::sleep_for(std::chrono::seconds(10)); // wait for redis to contain recovered orders
 
             OrderUtils::recoverFromRedis(engine, redis);  
     
@@ -782,7 +793,6 @@ int main()
                     OrderUtils::addOrderToBook(engine, j);
                 }
                 else if (channel == "orders:cancel") {
-                    std::cout << "Attempting order cancellation" << std::endl;
                     
                     auto j = json::parse(msg);
                     
@@ -829,9 +839,9 @@ int main()
         }
 
         std::cout << "Matching engine started" << std::endl;
-        
+      
         while (running) {
-
+        
             // process market orders first
             engine.matchMarketOrders();
             
