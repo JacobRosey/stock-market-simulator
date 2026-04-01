@@ -131,7 +131,7 @@ app.post('/auth/login', async (req, res) => {
 
         // Create a dummy hash for non-existent users
         // to prevent timing attacks
-        const dummyHash = '$2b$10$abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123'; // 60 chars
+        const dummyHash = '$2b$10$abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123'; 
 
         // Use the real hash if user exists, otherwise use dummy
         const hashToCompare = user ? user.p_hash : dummyHash;
@@ -311,7 +311,7 @@ app.get('/api/stocks/:ticker/price-data', async (req, res) => {
         // Calculate stats from sampled data
         const prices = priceRows.map(p => p.price);
         const stats = {
-            name: "", // You'll need to join with stocks table if you want name
+            name: "",
             description: "",
             current: priceRows[priceRows.length - 1]?.price || 0,
             open: priceRows[0]?.price || 0,
@@ -413,8 +413,8 @@ app.get('/api/portfolio', async (req, res) => {
             .map(row => ({
                 ticker: row.ticker,
                 shares: parseFloat(row.shares),
-                averagePrice: parseFloat(row.average_price),
-                totalCost: parseFloat(row.total_cost),
+                averagePrice: parseFloat(row.average_price) || 0,
+                totalCost: parseFloat(row.total_cost) || 0,
                 currentPrice: parseFloat(row.current_price),
                 currentValue: parseFloat(row.current_value),
                 gainLoss: parseFloat(row.current_value) - parseFloat(row.total_cost),
@@ -514,9 +514,9 @@ const socketToUser = new Map();
 io.on('connection', (socket) => {
 
     socket.on('register', (userId) => {
-        userToSocket.set(userId, socket.id);
+        userToSocket.set(userId, socket);
         socketToUser.set(socket.id, userId)
-        console.log(`User ${socketToUser.get(socket.id)} registered with socket ${userToSocket.get(userId)}`);
+        console.log(`User ${socketToUser.get(socket.id)} registered with socket ${userToSocket.get(userId).id}`);
     });
 
     // Handle ticker subscription
@@ -626,6 +626,8 @@ const convertDepth = (depth) => ({
     lastPrice: depth.lastPrice / MICRO_UNIT
 });
 
+let totalFills = 0;
+let totalTimeNs = 0
 
 subscriber.on('message', async (channel, message) => {
     if (channel.startsWith('orders:depth:')) {
@@ -635,7 +637,7 @@ subscriber.on('message', async (channel, message) => {
             const depth = JSON.parse(message);
             const cached = depthCache.get(ticker);
 
-            // Convert all micro-units to normal units
+            // Convert all micro-units to normal units - do it in node instead of cpp thread for efficiency
             const convertedDepth = convertDepth(depth);
 
             // Determine effective price (use engine price if > 0, otherwise use cached)
@@ -656,7 +658,6 @@ subscriber.on('message', async (channel, message) => {
                     ...finalDepth,
                     ticker: ticker
                 });
-                //console.log(finalDepth);
             }
 
         } catch (e) {
@@ -666,7 +667,7 @@ subscriber.on('message', async (channel, message) => {
 
     if (channel == "orders:cancel") {
         try {
-            // 
+            
             const data = JSON.parse(message);
             console.log(`Order removed from matching engine: `, data);
 
@@ -685,6 +686,10 @@ subscriber.on('message', async (channel, message) => {
     }
 
     if (channel === 'orders:filled') {
+
+        // Somewhere I'm not converting the received price from micro-units back into dollars
+        // So i'm storing quantity in micro units in database - find and fix
+
         const trades = JSON.parse(message);
 
         const firstTimestamp = trades[0].timestamp;
@@ -693,19 +698,19 @@ subscriber.on('message', async (channel, message) => {
 
         const timeDiffNs = lastTimestamp - firstTimestamp;
         const timeDiffMs = timeDiffNs / 1_000_000; // convert to milliseconds
-        const fillsPerSec = (fillCount / timeDiffNs) * 1_000_000_000; // fills per second
+        const fillsPerSec = (fillCount / timeDiffNs) * 1_000_000_000;
 
-        console.log(`📊 Batch: ${fillCount} fills in ${timeDiffMs.toFixed(2)}ms → ${fillsPerSec.toFixed(0)} fills/sec`);
+        totalFills += fillCount;
+        totalTimeNs += timeDiffNs;
+        const avgFillsPerSec = (totalFills / totalTimeNs) * 1_000_000_000;
+
+        console.log(`📊 Batch: ${fillCount} fills in ${timeDiffMs.toFixed(2)}ms → ${fillsPerSec.toFixed(0)} fills/sec | Avg: ${avgFillsPerSec.toFixed(0)} fills/sec`);
+
 
         const fillMap = new Map(); // orderId -> { totalQty, totalCost, remainingQty, lastTimestamp }
 
         // Still need to update price history table for chart rendering
         const priceHistoryData = [];
-
-        const toNormal = (micro) => {
-            return micro / MICRO_UNIT
-        }
-
 
         for (const trade of trades) {
             const {
@@ -717,26 +722,41 @@ subscriber.on('message', async (channel, message) => {
             // For price history — store every individual fill
             priceHistoryData.push({
                 ticker,
-                price: toNormal(fillPrice),
+                price: fillPrice / MICRO_UNIT,
                 timestamp,
                 tradeId: bidOrderId // or askOrderId
             });
 
             // Process bid side
-            updateFillMap(bidOrderId, toNormal(bidRemainingQty), toNormal(fillQuantity), toNormal(fillPrice), timestamp, {
+            updateFillMap(bidOrderId, bidRemainingQty / MICRO_UNIT, fillQuantity / MICRO_UNIT, fillPrice / MICRO_UNIT, timestamp, {
                 userId: bidUserId,
                 ticker,
                 side: 'bid'
             }, fillMap);
 
             // Process ask side  
-            updateFillMap(askOrderId, toNormal(askRemainingQty), toNormal(fillQuantity), toNormal(fillPrice), timestamp, {
+            updateFillMap(askOrderId, askRemainingQty / MICRO_UNIT, fillQuantity / MICRO_UNIT, fillPrice / MICRO_UNIT, timestamp, {
                 userId: askUserId,
                 ticker,
                 side: 'ask'
             }, fillMap);
+            
+            const bidSocket = userToSocket.get(trade.bidUserId)
+            const askSocket = userToSocket.get(trade.askUserId)
+
+            // some userIds will be of bots which will not be connected to a socket
+            // so if that's the case just don't emit an update - only emit to actual users so their UI is updated
+    
+            // Should be sending a batch of all filled orders per active user instead of sending an update on every single fill
+            // do inside finally block after db queries have been executed
+            bidSocket?.emit("ORDER_FILLED", { orderId: bidOrderId, data: fillMap.get(bidOrderId) })
+            askSocket?.emit("ORDER_FILLED", { orderId: askOrderId, data: fillMap.get(askOrderId) })
         }
 
+        // early return to test real time data flow to client
+        // remove after order update notifications and portfolio/active order updates are working
+
+        return;
         let connection;
 
         try {
@@ -892,6 +912,7 @@ subscriber.on('message', async (channel, message) => {
     }
 
     // Should only be used for market orders that could not be filled
+    // Or limit orders that somehow reached engine while missing required data
     if (channel == 'orders:rejected') {
         const rejected = JSON.parse(message);
         const userId = await removeRejectedOrder(rejected.orderId)
@@ -915,9 +936,6 @@ async function getCurrentStockPrice(ticker) {
         throw new Error('Failed to fetch current price');
     }
 }
-
-// Remove an order due to being rejected by engine (for ex. unfilled market order) or cancelled order
-// if it's rejected handle message in rejected listener
 
 async function updateOrderStatus(newStatus, orderId) {
     try {
@@ -944,9 +962,12 @@ const MICRO_UNIT = 1e6;
 // In Node startup
 async function recoverUnfilledOrders() {
     try {
+        // Clear redis cache
+        await publisher.del('orders:recovery');
+        await publisher.del('orders:filled');
         // Load unfilled orders
         const [rows] = await db.query(
-            'SELECT * FROM orders WHERE status = "OPEN" ORDER BY created_at ASC'
+            `SELECT * FROM orders WHERE status = 'OPEN' ORDER BY created_at ASC`
         );
 
         if (rows.length === 0) {
