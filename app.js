@@ -455,7 +455,7 @@ app.get('/api/order-data', async (req, res) => {
         if (rows.length === 0) {
             // User exists but has no order rows
             return res.json({
-                positions: []
+                orders: []
             });
         }
 
@@ -466,15 +466,16 @@ app.get('/api/order-data', async (req, res) => {
             .map(row => ({
                 orderId: row.id,
                 ticker: row.ticker,
-                shares: parseFloat(row.shares),
                 type: row.type,
                 side: row.side,
                 price: parseFloat(row.price),
                 quantity: parseFloat(row.quantity),
-                filled_quantity: parseFloat(row.filled_quantity),
+                filledQuantity: parseFloat(row.filled_quantity),
                 status: row.status,
                 created_at: row.created_at
             }));
+
+        console.log(orders)
 
         res.json({
             orders
@@ -617,11 +618,11 @@ const depthCache = new Map(); // ticker -> latest depth snapshot
 const convertDepth = (depth) => ({
     asks: depth.asks.map(ask => ({
         price: ask.price / MICRO_UNIT,
-        qty: ask.qty / MICRO_UNIT
+        quantity: ask.quantity / MICRO_UNIT
     })),
     bids: depth.bids.map(bid => ({
         price: bid.price / MICRO_UNIT,
-        qty: bid.qty / MICRO_UNIT
+        quantity: bid.quantity / MICRO_UNIT
     })),
     lastPrice: depth.lastPrice / MICRO_UNIT
 });
@@ -637,7 +638,7 @@ subscriber.on('message', async (channel, message) => {
             const depth = JSON.parse(message);
             const cached = depthCache.get(ticker);
 
-            // Convert all micro-units to normal units - do it in node instead of cpp thread for efficiency
+            // Convert all micro-units back to normal units 
             const convertedDepth = convertDepth(depth);
 
             // Determine effective price (use engine price if > 0, otherwise use cached)
@@ -658,7 +659,7 @@ subscriber.on('message', async (channel, message) => {
                     ...finalDepth,
                     ticker: ticker
                 });
-            }
+            } 
 
         } catch (e) {
             console.error('❌ Failed to parse depth:', e);
@@ -673,12 +674,15 @@ subscriber.on('message', async (channel, message) => {
 
             const result = await updateOrderStatus("CANCELED", data.orderId);
 
+            console.log(result)
+
             if (!result) {
                 console.log("But could not be updated in the database! ")
             } else {
                 console.log("Order successfully canceled!")
             }
             // Send cancel confirmation to user via websocket
+            // Need access to user id for that
         }
         catch (e) {
             console.error(e)
@@ -686,9 +690,6 @@ subscriber.on('message', async (channel, message) => {
     }
 
     if (channel === 'orders:filled') {
-
-        // Somewhere I'm not converting the received price from micro-units back into dollars
-        // So i'm storing quantity in micro units in database - find and fix
 
         const trades = JSON.parse(message);
 
@@ -707,50 +708,56 @@ subscriber.on('message', async (channel, message) => {
         console.log(`📊 Batch: ${fillCount} fills in ${timeDiffMs.toFixed(2)}ms → ${fillsPerSec.toFixed(0)} fills/sec | Avg: ${avgFillsPerSec.toFixed(0)} fills/sec`);
 
 
-        const fillMap = new Map(); // orderId -> { totalQty, totalCost, remainingQty, lastTimestamp }
+        const fillMap = new Map(); // orderId -> { totalQuantity, totalCost, remainingQuantity, lastTimestamp }
 
         // Still need to update price history table for chart rendering
         const priceHistoryData = [];
 
         for (const trade of trades) {
             const {
-                askOrderId, askRemainingQty, askUserId,
-                bidOrderId, bidRemainingQty, bidUserId,
-                fillPrice, fillQuantity, ticker, timestamp
+                askOrderId, askRemainingQuantity, askUserId,
+                bidOrderId, bidRemainingQuantity, bidUserId,
+                filledPrice, filledQuantity, ticker, timestamp
             } = trade;
 
             // For price history — store every individual fill
             priceHistoryData.push({
                 ticker,
-                price: fillPrice / MICRO_UNIT,
+                price: filledPrice / MICRO_UNIT,
                 timestamp,
                 tradeId: bidOrderId // or askOrderId
             });
 
             // Process bid side
-            updateFillMap(bidOrderId, bidRemainingQty / MICRO_UNIT, fillQuantity / MICRO_UNIT, fillPrice / MICRO_UNIT, timestamp, {
+            updateFillMap(bidOrderId, bidRemainingQuantity / MICRO_UNIT, filledQuantity / MICRO_UNIT, filledPrice / MICRO_UNIT, timestamp, {
                 userId: bidUserId,
                 ticker,
                 side: 'bid'
             }, fillMap);
 
             // Process ask side  
-            updateFillMap(askOrderId, askRemainingQty / MICRO_UNIT, fillQuantity / MICRO_UNIT, fillPrice / MICRO_UNIT, timestamp, {
+            updateFillMap(askOrderId, askRemainingQuantity / MICRO_UNIT, filledQuantity / MICRO_UNIT, filledPrice / MICRO_UNIT, timestamp, {
                 userId: askUserId,
                 ticker,
                 side: 'ask'
             }, fillMap);
             
+            // Rest of the code in this scope needs to be moved to the finally block and batched by user id
             const bidSocket = userToSocket.get(trade.bidUserId)
             const askSocket = userToSocket.get(trade.askUserId)
 
-            // some userIds will be of bots which will not be connected to a socket
-            // so if that's the case just don't emit an update - only emit to actual users so their UI is updated
-    
-            // Should be sending a batch of all filled orders per active user instead of sending an update on every single fill
-            // do inside finally block after db queries have been executed
-            bidSocket?.emit("ORDER_FILLED", { orderId: bidOrderId, data: fillMap.get(bidOrderId) })
-            askSocket?.emit("ORDER_FILLED", { orderId: askOrderId, data: fillMap.get(askOrderId) })
+            const bidData = {
+                orderId: bidOrderId,
+                ...fillMap.get(bidOrderId)
+            }
+            const askData = {
+                orderId: askOrderId,
+                ...fillMap.get(askOrderId)
+            }
+
+            // optional chaining - bots aren't connected to socket
+            bidSocket?.emit("ORDER_FILLED",  bidData )
+            askSocket?.emit("ORDER_FILLED", askData )
         }
 
         // early return to test real time data flow to client
@@ -782,7 +789,7 @@ subscriber.on('message', async (channel, message) => {
             // I'm doing 4*n queries here, where n = fills. Need to figure out how to batch these
             for (const [orderId, data] of fillMap) {
 
-                if (data.remainingQty === 0) { // Fully filled
+                if (data.remainingQuantity === 0) { // Fully filled
                     await connection.query(
                         `UPDATE orders 
                     SET filled_quantity = filled_quantity + ?,
@@ -790,7 +797,7 @@ subscriber.on('message', async (channel, message) => {
                         status = 'FILLED',
                         updated_at = FROM_UNIXTIME(?)
                     WHERE id = ?`,
-                        [data.totalQty, data.totalCost, data.lastTimestamp, orderId]
+                        [data.totalQuantity, data.totalCost, data.lastTimestamp, orderId]
                     );
                 } else {
                     await connection.query( // Partial fill
@@ -799,7 +806,7 @@ subscriber.on('message', async (channel, message) => {
                         filled_cost = filled_cost + ?,
                         updated_at = FROM_UNIXTIME(?)
                     WHERE id = ?`,
-                        [data.totalQty, data.totalCost, data.lastTimestamp, orderId]
+                        [data.totalQuantity, data.totalCost, data.lastTimestamp, orderId]
                     );
                 }
                 if (data.bidUserId) {
@@ -819,9 +826,9 @@ subscriber.on('message', async (channel, message) => {
                         [
                             data.bidUserId,
                             data.ticker,
-                            data.totalQty,
+                            data.totalQuantity,
                             data.totalCost,
-                            data.totalQty,
+                            data.totalQuantity,
                             data.totalCost
                         ]
                     );
@@ -833,7 +840,7 @@ subscriber.on('message', async (channel, message) => {
                     SET reserved_shares = reserved_shares - ?,
                                 shares = shares - ?
                     WHERE user_id = ? AND ticker = ?`,
-                        [data.totalQty, data.totalQty, data.askUserId, data.ticker]
+                        [data.totalQuantity, data.totalQuantity, data.askUserId, data.ticker]
                     );
 
                     // Remove from portfolio if no more shares
@@ -862,23 +869,30 @@ subscriber.on('message', async (channel, message) => {
             console.log(`✅ Committed ${trades.length} order updates`);
 
             // Now emit to all relevant users using userIdToSocket map
+            /*
+            for trade in fillMap after sorting by userId : 
+            const bidSocket = userToSocket.get(trade.bidUserId)
+            const askSocket = userToSocket.get(trade.askUserId)
+            bidSocket?.emit("ORDER_FILLED", { orderId: bidOrderId, data: fillMap.get(bidOrderId) })
+            askSocket?.emit("ORDER_FILLED", { orderId: askOrderId, data: fillMap.get(askOrderId) })
+            */
         }
 
 
-        function updateFillMap(orderId, remainingQty, fillQty, fillPrice, timestamp, meta, map) {
+        function updateFillMap(orderId, remainingQuantity, filledQuantity, filledPrice, timestamp, meta, map) {
             const entry = map.get(orderId) || {
-                totalQty: 0,
+                totalQuantity: 0,
                 totalCost: 0,
-                remainingQty: 0,
+                remainingQuantity: 0,
+                filledQuantity: 0,
                 lastTimestamp: 0,
-                bidUserId: null,
-                askUserId: null,
                 ticker: meta.ticker
             };
 
-            entry.totalQty += fillQty;
-            entry.totalCost += fillQty * fillPrice;
-            entry.remainingQty = remainingQty;
+            entry.totalQuantity += filledQuantity;
+            entry.totalCost += filledQuantity * filledPrice;
+            entry.remainingQuantity = remainingQuantity;
+            entry.filledQuantity = filledQuantity
 
             if (meta.side === 'bid') {
                 entry.bidUserId = meta.userId;
@@ -892,23 +906,6 @@ subscriber.on('message', async (channel, message) => {
 
             map.set(orderId, entry);
         }
-
-        /*
-        
-        // Notify clients via WebSocket
-        broadcastToUser(trade.buyerId, {
-            type: 'ORDER_FILLED',
-            trade
-        });
-        
-        broadcastToUser(trade.sellerId, {
-            type: 'ORDER_FILLED',
-            trade
-        });
-        
-        // Broadcast price update
-        broadcastPrice(trade.ticker, trade.price);
-        */
     }
 
     // Should only be used for market orders that could not be filled
@@ -965,6 +962,7 @@ async function recoverUnfilledOrders() {
         // Clear redis cache
         await publisher.del('orders:recovery');
         await publisher.del('orders:filled');
+        await publisher.del('orders:new')
         // Load unfilled orders
         const [rows] = await db.query(
             `SELECT * FROM orders WHERE status = 'OPEN' ORDER BY created_at ASC`
@@ -978,7 +976,7 @@ async function recoverUnfilledOrders() {
         console.log(`Queueing ${rows.length} orders for recovery`);
 
         for (const row of rows) {
-            const remainingQty = Math.round(row.quantity * MICRO_UNIT - row.filled_quantity * MICRO_UNIT);
+            const remainingQuantity = Math.round(row.quantity * MICRO_UNIT - row.filled_quantity * MICRO_UNIT);
 
             const order = {
                 id: row.id,
@@ -986,7 +984,7 @@ async function recoverUnfilledOrders() {
                 type: row.type,
                 ticker: row.ticker,
                 side: row.side,
-                quantity: remainingQty,  // already in micro-units
+                quantity: remainingQuantity,  // already in micro-units
                 price: row.price ? Math.round(row.price * MICRO_UNIT) : null,
                 estimatedCost: Math.round(row.estimated_amount * MICRO_UNIT),
                 timestamp: new Date(row.created_at).getTime()
