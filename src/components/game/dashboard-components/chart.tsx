@@ -20,6 +20,7 @@ export default function Chart({ ticker }: ChartProps) {
   const [range, setRange] = useState('1m');
   const ranges = ['1m', '5m', '1h', '1d', '1w'];
 
+  // Set data point refresh rate (time between new point rendering)
   const getIntervalMs = (range: string) => {
     switch (range) {
       case '1m': return 1000;      // 1 second
@@ -31,19 +32,20 @@ export default function Chart({ ticker }: ChartProps) {
     }
   };
 
+  // Set maximum number of data points in chart
   const getMaxPoints = (range: string) => {
     switch (range) {
-      case '1m': return 60;         // 60 seconds
-      case '5m': return 60;         // 60 5-second intervals = 5 minutes
-      case '1h': return 60;         // 60 minutes
-      case '1d': return 288;        // 288 5-minute intervals
-      case '1w': return 168;        // 168 hours
+      case '1m': return 60;       
+      case '5m': return 60;        
+      case '1h': return 60;         
+      case '1d': return 288;        
+      case '1w': return 168;        
       default: return 60;
     }
   };
 
   const [stats, setStats] = useState({
-    name: "",
+    name: ticker,
     description: "",
     current: 0,
     open: 0,
@@ -84,6 +86,7 @@ export default function Chart({ ticker }: ChartProps) {
   }, [prices, ticker]);
 
   // Interval-driven chart updates — runs on a fixed tick regardless of websocket communication
+  // Needs work - still incorrect x-axis 
   useEffect(() => {
     const intervalMs = getIntervalMs(range);
     const maxPoints = getMaxPoints(range);
