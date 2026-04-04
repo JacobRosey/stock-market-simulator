@@ -60,7 +60,8 @@ export const placeOrder = async (data: OrderRequestData) => {
         }
 
         const responseData = await response.json();
-        return responseData;
+        console.log(responseData)
+        return {...responseData, ...data};
 
     } catch (error) {
         console.error('Error placing order:', error);
@@ -113,6 +114,7 @@ export const getOrderData = async () => {
         }
 
         const responseData = await response.json();
+        console.log("Order data: ", responseData)
         return responseData;
 
     } catch (error) {

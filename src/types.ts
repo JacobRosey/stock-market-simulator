@@ -46,19 +46,21 @@ export type OrderSide = 'BUY' | 'SELL';
 export type OrderType = "MARKET" | "LIMIT";
 export type OrderStatus = 'OPEN' | 'FILLED' | 'PARTIALLY_FILLED' | 'CANCELLED' | 'REJECTED';
 
-// OrderResponse instead? better naming needed
 export interface Order {
-    orderId: Number;
+    orderId: number;
     userId: string;
     ticker: Ticker;
     side: OrderSide;
     type: OrderType;
-    quantity: number;
-    price: number;
+    price: number | null;           // null for market orders
+    quantity: number;               // original quantity
+    filledQuantity: number;         // 0 for open orders
+    remainingQuantity: number;      // quantity - filledQuantity; just needed on recovery to place correct # of shares to fill in matching engine
     status: OrderStatus;
     createdAt: string;
-    filledAt?: string;
-    filled_quantity?: number;
+    updatedAt: string;
+    estimatedAmount: number;
+    filledPrice: number;             // total cost of filled portion
 }
 
 export interface OrderRequestData {
@@ -71,7 +73,7 @@ export interface OrderRequestData {
 
 interface DepthLevel {
     price: number;
-    qty: number;
+    quantity: number;
 }
 
 export interface OrderDepth {
@@ -131,15 +133,6 @@ export interface WebSocketMessage<T = any> {
     timestamp: number;
 }
 
-export interface OrderFilledData {
-    orderId: string;
-    ticker: Ticker;
-    side: OrderSide;
-    quantity: number;
-    price: number;
-    totalValue: number;
-}
-
 export interface NewsData {
     headline: string;
     sentiment: number;  // -10 to 10 : avoid floating point operations
@@ -166,8 +159,10 @@ export interface WebSocketContextValue {
     subscribeToTicker: (ticker: Ticker) => void;  
     getDepthForTicker: (ticker: Ticker) => OrderDepth | undefined; 
     attemptOrderCancellation: (orderId: Number, ticker: Ticker, type: OrderType, side: OrderSide) => void;
+    addOrder: (order: Order) => void;
 
     // Connection status
     isConnected: boolean;
+    ordersLoading: boolean;
     lastMessageAt: number | null;
 }

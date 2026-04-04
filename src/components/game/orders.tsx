@@ -1,37 +1,25 @@
-import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { getOrderData } from '../../api.ts';
 import { useAuth } from '../../context/AuthContext';
 import { useWebSocket } from '../../context/WebSocketContext.tsx';
-import type { Order, OrderSide, OrderType, Ticker } from '../../types'; 
+import type { OrderSide, OrderType, Ticker } from '../../types'; 
 import './orders.css';
 
 export default function Orders() {
     const { logout } = useAuth();
-    const { attemptOrderCancellation } = useWebSocket();
-    const [orders, setOrders] = useState<Order[]>([]);
-    const [loading, setLoading] = useState(true);
+    const { attemptOrderCancellation, userOrders, ordersLoading } = useWebSocket();
 
-    useEffect(() => {
-        fetchOrders();
-    }, []);
+    if (ordersLoading) return <div>Loading...</div>;
 
-    const fetchOrders = async () => {
-        const data = await getOrderData();
-        setOrders(data.orders ? data.orders : []);
-        setLoading(false);
-    };
-
-    const cancelOrder = async (orderId: Number, ticker: Ticker, type: OrderType, side: OrderSide,) => {
+    const cancelOrder = async (orderId: number, ticker: Ticker, type: OrderType, side: OrderSide) => {
         attemptOrderCancellation(orderId, ticker, type, side);
-        fetchOrders(); // Refresh after cancellation
     };
-
     const handleLogout = async () => {
         await logout();
     };
 
-    if (loading) return <div>Loading...</div>;
+    console.log("user orders in orders.tsx: ", userOrders);
+
+    if (ordersLoading) return <div>Loading...</div>;
 
     return (
         <div className="orders-container">
@@ -44,7 +32,7 @@ export default function Orders() {
 
             <div className="open-orders">
                 <h2>Open Orders</h2>
-                {orders.length === 0 ? (
+                {userOrders.length === 0 ? (
                     <p>No open orders</p>
                 ) : (
                     <div className="table-container">
@@ -54,14 +42,14 @@ export default function Orders() {
                                     <th>Ticker</th>
                                     <th>Side</th>
                                     <th>Price</th>
-                                    <th>Qty</th>
+                                    <th>Ordered</th>
                                     <th>Filled</th>
                                     <th>Status</th>
                                     <th>Action</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {orders.map(order => (
+                                {userOrders.map(order => (
                                     <tr key={order.orderId.toString()}>
                                         <td>{order.ticker}</td>
                                         <td className={order.side.toLowerCase()}>
@@ -69,7 +57,7 @@ export default function Orders() {
                                         </td>
                                         <td>{order.price || 'Market'}</td>
                                         <td>{order.quantity}</td>
-                                        <td>{order.filled_quantity || 0}</td>
+                                        <td>{order.filledQuantity}</td>
                                         <td>{order.status}</td>
                                         <td>
                                             <button 
