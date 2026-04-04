@@ -16,7 +16,7 @@ using namespace sw::redis;
 struct PriceLevel
 {
     uint64_t price;
-    uint64_t totalQty;
+    uint64_t totalQuantity;
 };
 
 struct DepthSnapshot
@@ -122,15 +122,15 @@ public:
     std::string askUserId;
     uint64_t bidOrderId;
     uint64_t askOrderId;
-    uint64_t bidRemainingQty;
-    uint64_t askRemainingQty;
+    uint64_t bidRemainingQuantity;
+    uint64_t askRemainingQuantity;
     std::string ticker;
-    uint64_t fillPrice;
-    uint64_t fillQty;
+    uint64_t filledPrice;
+    uint64_t filledQuantity;
     uint64_t timestamp;
 
     explicit FilledOrder(std::string bidUserId, std::string askUserId, uint64_t bidOrderId, uint64_t askOrderId, uint64_t brq, uint64_t arq, std::string t, uint64_t fq, uint64_t fp)
-        : bidUserId(bidUserId), askUserId(askUserId), bidOrderId(bidOrderId), askOrderId(askOrderId), bidRemainingQty(brq), askRemainingQty(arq), ticker(t), fillQty(fq), fillPrice(fp), timestamp(getTimestamp()) {}
+        : bidUserId(bidUserId), askUserId(askUserId), bidOrderId(bidOrderId), askOrderId(askOrderId), bidRemainingQuantity(brq), askRemainingQuantity(arq), ticker(t), filledQuantity(fq), filledPrice(fp), timestamp(getTimestamp()) {}
 
     json toJson() const
     {
@@ -139,11 +139,11 @@ public:
             {"askUserId", askUserId},
             {"bidOrderId", bidOrderId},
             {"askOrderId", askOrderId},
-            {"bidRemainingQty", bidRemainingQty},
-            {"askRemainingQty", askRemainingQty},
+            {"bidRemainingQuantity", bidRemainingQuantity},
+            {"askRemainingQuantity", askRemainingQuantity},
             {"ticker", ticker},
-            {"fillPrice", fillPrice},
-            {"fillQuantity", fillQty},
+            {"filledPrice", filledPrice},
+            {"filledQuantity", filledQuantity},
             {"timestamp", timestamp}};
     }
 };
@@ -400,11 +400,11 @@ public:
         j["lastPrice"] = (it != tickerPrices.end()) ? it->second  : 0.0;
 
         for (auto it = snap.topAsks.rbegin(); it != snap.topAsks.rend(); ++it){
-            j["asks"].push_back({{"price", it->price }, {"qty", it->totalQty }});
+            j["asks"].push_back({{"price", it->price }, {"quantity", it->totalQuantity }});
         }
 
         for (auto &l : snap.topBids)
-            j["bids"].push_back({{"price", l.price  }, {"qty", l.totalQty  }});
+            j["bids"].push_back({{"price", l.price  }, {"quantity", l.totalQuantity  }});
 
         std::string channel = "orders:depth:" + ticker;
         std::string message = j.dump();
@@ -494,10 +494,10 @@ public:
                 // I already have estimatedCost in the order object so just use that
 
                 Order limitBid = *bidIt;
-                uint64_t fillQty = std::min(marketAsk.remainingQuantity, limitBid.remainingQuantity);
+                uint64_t filledQuantity = std::min(marketAsk.remainingQuantity, limitBid.remainingQuantity);
 
-                marketAsk.remainingQuantity -= fillQty;
-                limitBid.remainingQuantity -= fillQty;
+                marketAsk.remainingQuantity -= filledQuantity;
+                limitBid.remainingQuantity -= filledQuantity;
 
                 book.eraseLimitBid(bidIt);
 
@@ -511,7 +511,7 @@ public:
                     limitBid.userId, marketAsk.userId,
                     limitBid.orderId, marketAsk.orderId,
                     limitBid.remainingQuantity, marketAsk.remainingQuantity,
-                    ticker, fillQty, limitBid.price.value());
+                    ticker, filledQuantity, limitBid.price.value());
             }
 
             // Market bids vs limit asks
@@ -534,7 +534,7 @@ public:
                 }
 
                 Order limitAsk = *askIt;
-                uint64_t fillQty = std::min(marketBid.remainingQuantity, limitAsk.remainingQuantity);
+                uint64_t filledQuantity = std::min(marketBid.remainingQuantity, limitAsk.remainingQuantity);
 
                 // Here I'm assuming that while walking the book, i won't exceed the estimated cost. Incorrect.
                 // I need to just fill as many shares as possible while staying <= estimated cost for market bid
@@ -542,8 +542,8 @@ public:
 
                 // use estimatedCost to only fill shares up to that cost
 
-                marketBid.remainingQuantity -= fillQty;
-                limitAsk.remainingQuantity -= fillQty;
+                marketBid.remainingQuantity -= filledQuantity;
+                limitAsk.remainingQuantity -= filledQuantity;
 
                 book.eraseLimitAsk(askIt);
 
@@ -557,7 +557,7 @@ public:
                     marketBid.userId, limitAsk.userId,
                     marketBid.orderId, limitAsk.orderId,
                     marketBid.remainingQuantity, limitAsk.remainingQuantity,
-                    ticker, fillQty, limitAsk.price.value());
+                    ticker, filledQuantity, limitAsk.price.value());
             }
             book.clearMarketOrders(); // clear any remaining orders that couldn't be fulfilled
                                       // that method should probably populate a rejectedOrders queue to be drained by publisher
@@ -572,19 +572,19 @@ public:
         Order bid = *bidIt;
         Order ask = *askIt;
 
-        uint64_t fillPrice = (bid.timestamp < ask.timestamp)
+        uint64_t filledPrice = (bid.timestamp < ask.timestamp)
                                  ? bid.price.value()  // bid was resting, fill at bid price
                                  : ask.price.value(); // ask was resting, fill at ask price
 
-        uint64_t fillQty = std::min(bid.remainingQuantity, ask.remainingQuantity);
-        bid.remainingQuantity -= fillQty;
-        ask.remainingQuantity -= fillQty;
+        uint64_t filledQuantity = std::min(bid.remainingQuantity, ask.remainingQuantity);
+        bid.remainingQuantity -= filledQuantity;
+        ask.remainingQuantity -= filledQuantity;
 
         filledOrders.emplace_back(
             bid.userId, ask.userId,
             bid.orderId, ask.orderId,
             bid.remainingQuantity, ask.remainingQuantity,
-            bid.ticker, fillQty, fillPrice);
+            bid.ticker, filledQuantity, filledPrice);
 
         // Erase and place back if not filled so depth map is updated 
         // Probably better to just manually call the updateLevels function and 
@@ -865,16 +865,16 @@ int main()
     while (running) {
 
         auto fills = engine.waitAndDrain(std::chrono::milliseconds(100), 150);
-    
-        if (fills.empty()) continue; // If no fills occurred, no depth/prices changed - don't publish duplicate data
 
-        json batch = json::array();
-        for (const auto& fill : fills) {
-            tickerPrices[fill.ticker] = fill.fillPrice;
-            batch.push_back(fill.toJson());
+        if(fills.size()){
+            json batch = json::array();
+            for (const auto& fill : fills) {
+                tickerPrices[fill.ticker] = fill.filledPrice;
+                batch.push_back(fill.toJson());
+            }
+            publisherRedis.publish("orders:filled", batch.dump());
         }
-        publisherRedis.publish("orders:filled", batch.dump());
-
+        // May still need to publish depth if we received an order that couldn't be immediately filled
         engine.publishAllDepths(publisherRedis, tickerPrices);
     } });
 
