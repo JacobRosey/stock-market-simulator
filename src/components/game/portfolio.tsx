@@ -44,6 +44,7 @@ export default function Portfolio() {
       <div className="dashboard-container">
         <nav className="top-nav">
           <h1 className="title">Paper Trader</h1>
+          <Link to="/orders">View Orders</Link>
           <Link to="/">Back to Trading</Link>
           <button onClick={handleLogout}>Logout</button>
         </nav>
@@ -59,6 +60,7 @@ export default function Portfolio() {
     <div className="portfolio-container">
       <nav className="top-nav">
         <h1 className="title">Paper Trader</h1>
+        <Link to="/orders">View Orders</Link>
         <Link to="/">Back to Trading</Link>
         <button onClick={handleLogout}>Logout</button>
       </nav>
