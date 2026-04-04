@@ -1,6 +1,6 @@
 // websocket-context.jsx
 import { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { Outlet } from 'react-router-dom';  // Add this import
+import { Outlet } from 'react-router-dom';
 import { io, Socket } from 'socket.io-client';
 import type {
     Order,
@@ -15,6 +15,7 @@ import type {
 } from '../types';
 
 import { useAuth } from './AuthContext';
+import { fetchPortfolio, getOrderData } from '../api';
 
 const WebSocketContext = createContext<WebSocketContextValue | null>(null);
 
@@ -22,6 +23,7 @@ export const WebSocketProvider = () => {
     const [socket, setSocket] = useState<Socket | null>(null);
     const [prices, setPrices] = useState<Record<string, number>>({});
     const [userOrders, setUserOrders] = useState<Order[]>([]);
+    const [ordersLoading, setOrdersLoading] = useState(true)
     const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
     const [latestNews, setLatestNews] = useState<NewsData | null>(null);
     const [isConnected, setIsConnected] = useState(false);
@@ -30,6 +32,21 @@ export const WebSocketProvider = () => {
     const [depthData, setDepthData] = useState<Record<string, OrderDepth>>({}); // Store depth per ticker
 
     const { user, loading } = useAuth();
+
+    useEffect(() => {
+        if (!user?.user_id || loading) return;
+
+        const loadInitialOrders = async () => {
+            try {
+                const data = await getOrderData();
+                setUserOrders(data.orders || []);
+            } finally {
+                setOrdersLoading(false);
+            }
+        };
+
+        loadInitialOrders();
+    }, [user?.user_id, loading])
 
     useEffect(() => {
 
@@ -51,13 +68,12 @@ export const WebSocketProvider = () => {
             return;
         }
 
-
         const newSocket = io(import.meta.env.VITE_SOCKET_URL || 'http://localhost:8080', {
             transports: ['websocket', 'polling'], //fallback to polling
             reconnectionAttempts: 5
         });
 
-        newSocket.on('connect', () => {  
+        newSocket.on('connect', () => {
             setIsConnected(true);
             newSocket.emit('register', user.user_id);
 
@@ -67,7 +83,7 @@ export const WebSocketProvider = () => {
         newSocket.on('depth', (data: OrderDepth & { ticker: string }) => {
 
             console.log("Received depth snapshot")
-            
+
             setDepthData(prev => {
                 const newState = {
                     ...prev,
@@ -91,19 +107,33 @@ export const WebSocketProvider = () => {
         });
 
         newSocket.on('CANCEL_UPDATE', (data) => {
-            console.log('Received message from server:', data);
+            console.log(data)
+            // Update the cancelled order - this just removes it
 
-            // set user orders - delete cancelled order in client memory on success,
-            // update available cash (?) right now portfolio just shows total cash, should make it show available instead 
-
-            // toast message should be shown on cancel success/failure
-        });
+            // setUserOrders(prev => prev.filter(order => order.orderId !== data.orderId));
+        })
 
         newSocket.on('ORDER_FILLED', (data: Order) => {
-            setUserOrders(prev => [...prev, data]);
-            //setLastMessageAt(Date.now());
 
-            // toast message should be shown to client on order fill
+            console.log("Order fill data in websocket context: ", data)
+            console.log('Filled quantity: ', data.filledQuantity)
+            console.log("filled price: ", data.filledPrice)
+            setUserOrders(prev => prev.map(order =>
+                order.orderId === data.orderId
+                    ? {
+                        ...order,
+                        filledQuantity: data.filledQuantity + order.filledQuantity,
+                        remainingQuantity: data.remainingQuantity,
+                        status: data.remainingQuantity === 0 ? 'FILLED' : 'PARTIALLY_FILLED',
+                        updatedAt: new Date().toISOString()
+                    }
+                    : order
+            ));
+
+            // toast message should be shown to client on order fill (and cancellation status - any non-immediate update that may or may not occur in the future)
+
+            // send message saying "Order for x of ticker y (partially if remaining > 0) filled with z quantity at price: "
+            // or something to that effect
 
         });
 
@@ -138,6 +168,10 @@ export const WebSocketProvider = () => {
         }
     }, [socket])
 
+    const addOrder = useCallback(async (order: Order) => {
+        setUserOrders(prev => [order, ...prev]);
+    }, []);
+
     const getDepthForTicker = useCallback((ticker: Ticker) => {
         return depthData[ticker];
     }, [depthData]);
@@ -146,10 +180,12 @@ export const WebSocketProvider = () => {
         <WebSocketContext.Provider value={{
             prices,
             userOrders,
+            ordersLoading,
             latestNews,
             portfolio,
             isConnected,
             lastMessageAt,
+            addOrder,
             subscribeToTicker,
             getDepthForTicker,
             attemptOrderCancellation
