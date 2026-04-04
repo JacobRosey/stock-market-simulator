@@ -1,7 +1,7 @@
 // OrderBook.tsx
 import { useState, useEffect } from 'react';
 import { placeOrder } from '../../../api';
-import type { OrderRequestData, OrderSide, OrderType, Ticker } from '../../../types';
+import type { Order, OrderRequestData, OrderSide, OrderType, Ticker } from '../../../types';
 import { useWebSocket } from '../../../context/WebSocketContext';
 import './orderbook.css'
 
@@ -21,12 +21,12 @@ export default function OrderBook({ selectedTicker }: OrderBookProps) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const { getDepthForTicker, subscribeToTicker, isConnected } = useWebSocket();
+  const { getDepthForTicker, subscribeToTicker, addOrder, isConnected } = useWebSocket();
   const depth = getDepthForTicker(selectedTicker as Ticker);
 
   // Set default values for initial page load 
-  const asks = depth?.asks ?? Array.from({length: 3}, () => ({price: 0, qty: 0}));
-  const bids = depth?.bids ?? Array.from({length: 3}, () => ({price: 0, qty: 0}));
+  const asks = depth?.asks ?? Array.from({ length: 3 }, () => ({ price: 0, quantity: 0 }));
+  const bids = depth?.bids ?? Array.from({ length: 3 }, () => ({ price: 0, quantity: 0 }));
   const bestAsk = Math.min(...asks.map(a => a.price));
   const bestBid = Math.max(...bids.map(b => b.price));
   const spread = bestAsk - bestBid;
@@ -34,28 +34,28 @@ export default function OrderBook({ selectedTicker }: OrderBookProps) {
   const spreadPercent = assetPrice > 0 ? (spread / assetPrice) * 100 : 0;
 
 
-useEffect(() => {
-  if (!selectedTicker) return;
-  
-  const attemptSubscription = () => {
-    if (isConnected) {
-      subscribeToTicker(selectedTicker as Ticker);
-    } else {
-      // Try again in 1 second - mostly just to handle initial app start
-      // when client connects before any order depth exists in redis
-      setTimeout(attemptSubscription, 1000);
-    }
-  };
-  
-  attemptSubscription();
-  
-}, [selectedTicker, isConnected]);
+  useEffect(() => {
+    if (!selectedTicker) return;
+
+    const attemptSubscription = () => {
+      if (isConnected) {
+        subscribeToTicker(selectedTicker as Ticker);
+      } else {
+        // Try again in 1 second - mostly just to handle initial app start
+        // when client connects before any order depth exists 
+        setTimeout(attemptSubscription, 1000);
+      }
+    };
+
+    attemptSubscription();
+
+  }, [selectedTicker, isConnected]);
 
   const formatPrice = (price: number) => price.toFixed(2);
-  const formatSize = (qty: number) => qty.toString();
+  const formatSize = (quantity: number) => quantity.toString();
 
   const handleOrder = async (orderSide: OrderSide) => {
-  
+
     if (!quantity || parseInt(quantity) <= 0) {
       setError('Please enter a valid quantity');
       return;
@@ -86,9 +86,33 @@ useEffect(() => {
       if (!response.success) {
         setError(response.message)
       } else {
+        console.log(`order placed successfully: `, response)
+        const result = await response;
+
+
+        const newOrder: Order = {
+          orderId: result.orderId,
+          userId: result.userId,
+          ticker: result.ticker,
+          side: result.side,
+          type: result.type,
+          price: result.price,
+          quantity: result.quantity,
+          filledQuantity: 0,
+          remainingQuantity: result.quantity,
+          status: 'OPEN',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          estimatedAmount: result.estimatedAmount,
+          filledPrice: 0
+        };
+
+        addOrder(newOrder);
+
+
         setSuccess(response.message);
       }
- 
+
       setQuantity('');
       setLimitPrice("");
 
@@ -117,7 +141,7 @@ useEffect(() => {
         {asks.map((ask, i) => (
           <div key={`ask-${i}`} className="order-book-row ask">
             <span className="price">{formatPrice(ask.price)}</span>
-            <span className="size">{formatSize(ask.qty)}</span>
+            <span className="size">{formatSize(ask.quantity)}</span>
           </div>
         ))}
       </div>
@@ -130,7 +154,7 @@ useEffect(() => {
         {bids.map((bid, i) => (
           <div key={`bid-${i}`} className="order-book-row bid">
             <span className="price">{formatPrice(bid.price)}</span>
-            <span className="size">{formatSize(bid.qty)}</span>
+            <span className="size">{formatSize(bid.quantity)}</span>
           </div>
         ))}
       </div>
