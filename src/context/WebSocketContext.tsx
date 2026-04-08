@@ -11,7 +11,10 @@ import type {
     Ticker,
     OrderDepth,
     OrderType,
-    OrderSide
+    OrderSide,
+    Position,
+    PortfolioUpdate,
+    OrderFillUpdate
 } from '../types';
 
 import { useAuth } from './AuthContext';
@@ -29,24 +32,80 @@ export const WebSocketProvider = () => {
     const [isConnected, setIsConnected] = useState(false);
     const [lastMessageAt, setLastMessageAt] = useState<number | null>(null);
 
-    const [depthData, setDepthData] = useState<Record<string, OrderDepth>>({}); // Store depth per ticker
+    const [depthData, setDepthData] = useState<Record<string, OrderDepth>>({});
 
     const { user, loading } = useAuth();
+    const [portfolioLoading, setPortfolioLoading] = useState(true);
 
+    function applyPortfolioUpdate(prev: Portfolio, update: PortfolioUpdate, prices: Record<string, number>): Portfolio {
+        const updatedPositions = prev.positions
+            .map(p => {
+                const delta = update.positions[p.ticker];
+                if (!delta) return p;
+
+                const newShares = p.shares + delta.sharesDelta;
+                const newCost = p.totalCost + delta.costDelta;
+                const currentPrice = prices[p.ticker] ?? p.currentPrice;
+                const currentValue = newShares * currentPrice;
+
+                return {
+                    ...p,
+                    shares: newShares,
+                    totalCost: newCost,
+                    averagePrice: newCost / newShares,
+                    currentPrice,
+                    currentValue,
+                    gainLoss: currentValue - newCost,
+                    gainLossPercent: (currentValue - newCost) / newCost * 100,
+                };
+            })
+            .filter(p => p.shares > 0);
+
+        // Handle new positions (buying something not previously held)
+        for (const [ticker, delta] of Object.entries(update.positions)) {
+            if (delta.sharesDelta > 0 && !prev.positions.find(p => p.ticker === ticker)) {
+                const currentPrice = prices[ticker] ?? 0;
+                const currentValue = delta.sharesDelta * currentPrice;
+                updatedPositions.push({
+                    ticker,
+                    shares: delta.sharesDelta,
+                    totalCost: delta.costDelta,
+                    averagePrice: delta.costDelta / delta.sharesDelta,
+                    currentPrice,
+                    currentValue,
+                    gainLoss: currentValue - delta.costDelta,
+                    gainLossPercent: (currentValue - delta.costDelta) / delta.costDelta * 100,
+                });
+            }
+        }
+
+        return {
+            ...prev,
+            cash: prev.cash + update.cashDelta,
+            positions: updatedPositions,
+        };
+    }
+
+    // Load initial user data on component mount
     useEffect(() => {
         if (!user?.user_id || loading) return;
 
-        const loadInitialOrders = async () => {
+        const loadInitialData = async () => {
             try {
-                const data = await getOrderData();
-                setUserOrders(data.orders || []);
+                const [ordersData, portfolioData] = await Promise.all([
+                    getOrderData(),
+                    fetchPortfolio()
+                ]);
+                setUserOrders(ordersData.orders || []);
+                setPortfolio(portfolioData);
             } finally {
                 setOrdersLoading(false);
+                setPortfolioLoading(false);
             }
         };
 
-        loadInitialOrders();
-    }, [user?.user_id, loading])
+        loadInitialData();
+    }, [user?.user_id, loading]);
 
     useEffect(() => {
 
@@ -113,18 +172,19 @@ export const WebSocketProvider = () => {
             // setUserOrders(prev => prev.filter(order => order.orderId !== data.orderId));
         })
 
-        newSocket.on('ORDER_FILLED', (data: Order) => {
+        newSocket.on('ORDER_PLACED', (newOrder: Order) => {
+            setUserOrders(prev => [newOrder, ...prev]);
+        });
 
-            console.log("Order fill data in websocket context: ", data)
-            console.log('Filled quantity: ', data.filledQuantity)
-            console.log("filled price: ", data.filledPrice)
+        newSocket.on('ORDER_FILLED', (data: OrderFillUpdate) => {
+           
             setUserOrders(prev => prev.map(order =>
                 order.orderId === data.orderId
                     ? {
                         ...order,
-                        filledQuantity: data.filledQuantity + order.filledQuantity,
+                        filledQuantity: order.filledQuantity + data.filledQuantity,
                         remainingQuantity: data.remainingQuantity,
-                        status: data.remainingQuantity === 0 ? 'FILLED' : 'PARTIALLY_FILLED',
+                        status: data.remainingQuantity == 0 ? "FILLED" : "PARTIALLY_FILLED",
                         updatedAt: new Date().toISOString()
                     }
                     : order
@@ -137,9 +197,11 @@ export const WebSocketProvider = () => {
 
         });
 
-        newSocket.on('PORTFOLIO_UPDATE', (data: Portfolio) => {
-            setPortfolio(data);
-            //setLastMessageAt(Date.now());
+        newSocket.on('PORTFOLIO_UPDATE', (update: PortfolioUpdate) => {
+            setPortfolio(prev => {
+                if (!prev) return prev;
+                return applyPortfolioUpdate(prev, update, prices);
+            });
         });
 
         setSocket(newSocket);
@@ -185,6 +247,7 @@ export const WebSocketProvider = () => {
             portfolio,
             isConnected,
             lastMessageAt,
+            portfolioLoading,
             addOrder,
             subscribeToTicker,
             getDepthForTicker,
