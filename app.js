@@ -63,7 +63,6 @@ const authenticateToken = (req, res, next) => {
 
 app.post('/auth/register', async (req, res) => {
     const { username, password } = req.body;
-    const STARTING_CASH = 10000
 
     try {
         // Check if username exists
@@ -78,8 +77,8 @@ app.post('/auth/register', async (req, res) => {
 
         const hash = await bcrypt.hash(password, 10);
         const [result] = await db.query(
-            'INSERT INTO users (username, p_hash, cash) VALUES (?, ?, ?)',
-            [username, hash, STARTING_CASH]
+            'INSERT INTO users (username, p_hash) VALUES (?, ?)',
+            [username, hash]
         );
 
         // Get the newly created user to get the UUID (for JWT)
@@ -131,7 +130,7 @@ app.post('/auth/login', async (req, res) => {
 
         // Create a dummy hash for non-existent users
         // to prevent timing attacks
-        const dummyHash = '$2b$10$abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123'; 
+        const dummyHash = '$2b$10$abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123';
 
         // Use the real hash if user exists, otherwise use dummy
         const hashToCompare = user ? user.p_hash : dummyHash;
@@ -475,8 +474,6 @@ app.get('/api/order-data', async (req, res) => {
                 created_at: row.created_at
             }));
 
-        console.log(orders)
-
         res.json({
             orders
         });
@@ -545,8 +542,18 @@ io.on('connection', (socket) => {
 
     socket.on('cancel-order', async (data) => {
         try {
+            // This path can only be accessed by real users - bots will need to call order cancel function directly
+
+            /* 
+               Every authenticated client registers their userId on connection, so socketToUser should always have an entry.
+               If this fails, something went seriously wrong (client somehow connected but never registered, or the map was corrupted).
+               This is just a defensive check, but it *should* never happen
+            */
             const userId = socketToUser.get(socket.id);
-            if (!userId) return socket.emit('error', 'Not authenticated');
+            if (!userId) {
+                console.log("Something very weird happened with a cancel-order websocket message!")
+                return socket.emit('error', 'Not authenticated');
+            }
 
             const result = await verifyOrderOwnership(data.orderId);
 
@@ -659,7 +666,7 @@ subscriber.on('message', async (channel, message) => {
                     ...finalDepth,
                     ticker: ticker
                 });
-            } 
+            }
 
         } catch (e) {
             console.error('❌ Failed to parse depth:', e);
@@ -668,7 +675,7 @@ subscriber.on('message', async (channel, message) => {
 
     if (channel == "orders:cancel") {
         try {
-            
+
             const data = JSON.parse(message);
             console.log(`Order removed from matching engine: `, data);
 
@@ -713,6 +720,9 @@ subscriber.on('message', async (channel, message) => {
         // Still need to update price history table for chart rendering
         const priceHistoryData = [];
 
+        // Aggregate all fills by user before touching the DB
+        const userUpdates = new Map(); // userId -> { cashDelta, reservedCashDelta, positions: Map<ticker, {sharesDelta, costDelta, reservedSharesDelta}> }
+
         for (const trade of trades) {
             const {
                 askOrderId, askRemainingQuantity, askUserId,
@@ -741,29 +751,8 @@ subscriber.on('message', async (channel, message) => {
                 ticker,
                 side: 'ask'
             }, fillMap);
-            
-            // Rest of the code in this scope needs to be moved to the finally block and batched by user id
-            const bidSocket = userToSocket.get(trade.bidUserId)
-            const askSocket = userToSocket.get(trade.askUserId)
-
-            const bidData = {
-                orderId: bidOrderId,
-                ...fillMap.get(bidOrderId)
-            }
-            const askData = {
-                orderId: askOrderId,
-                ...fillMap.get(askOrderId)
-            }
-
-            // optional chaining - bots aren't connected to socket
-            bidSocket?.emit("ORDER_FILLED",  bidData )
-            askSocket?.emit("ORDER_FILLED", askData )
         }
 
-        // early return to test real time data flow to client
-        // remove after order update notifications and portfolio/active order updates are working
-
-        return;
         let connection;
 
         try {
@@ -786,77 +775,99 @@ subscriber.on('message', async (channel, message) => {
                 );
             }
 
-            // I'm doing 4*n queries here, where n = fills. Need to figure out how to batch these
-            for (const [orderId, data] of fillMap) {
-
-                if (data.remainingQuantity === 0) { // Fully filled
-                    await connection.query(
-                        `UPDATE orders 
-                    SET filled_quantity = filled_quantity + ?,
-                        filled_cost = filled_cost + ?,
-                        status = 'FILLED',
-                        updated_at = FROM_UNIXTIME(?)
-                    WHERE id = ?`,
-                        [data.totalQuantity, data.totalCost, data.lastTimestamp, orderId]
-                    );
-                } else {
-                    await connection.query( // Partial fill
-                        `UPDATE orders 
-                    SET filled_quantity = filled_quantity + ?,
-                        filled_cost = filled_cost + ?,
-                        updated_at = FROM_UNIXTIME(?)
-                    WHERE id = ?`,
-                        [data.totalQuantity, data.totalCost, data.lastTimestamp, orderId]
-                    );
+            const getOrCreateUser = (userId) => {
+                if (!userUpdates.has(userId)) {
+                    userUpdates.set(userId, { cashDelta: 0, reservedCashDelta: 0, positions: new Map() });
                 }
-                if (data.bidUserId) {
-                    await connection.query(
-                        `UPDATE users 
-                    SET reserved_cash = reserved_cash - ?
-                    WHERE user_id = ?`,
-                        [data.totalCost, data.bidUserId]
-                    );
+                return userUpdates.get(userId);
+            };
 
-                    await connection.query(
-                        `INSERT INTO portfolio (user_id, ticker, shares, total_cost)
-                    VALUES (?, ?, ?, ?)
-                    ON DUPLICATE KEY UPDATE
-                    shares = shares + ?,
-                    total_cost = total_cost + ?`,
-                        [
-                            data.bidUserId,
-                            data.ticker,
-                            data.totalQuantity,
-                            data.totalCost,
-                            data.totalQuantity,
-                            data.totalCost
-                        ]
-                    );
+            const getOrCreatePosition = (userEntry, ticker) => {
+                if (!userEntry.positions.has(ticker)) {
+                    userEntry.positions.set(ticker, { sharesDelta: 0, costDelta: 0, reservedSharesDelta: 0 });
+                }
+                return userEntry.positions.get(ticker);
+            };
+
+            for (const [orderId, data] of fillMap) {
+                if (data.bidUserId) {
+                    const user = getOrCreateUser(data.bidUserId);
+                    user.reservedCashDelta -= data.totalCost;
+
+                    const pos = getOrCreatePosition(user, data.ticker);
+                    pos.sharesDelta += data.totalQuantity;
+                    pos.costDelta += data.totalCost;
                 }
 
                 if (data.askUserId) {
+                    const user = getOrCreateUser(data.askUserId);
+                    user.cashDelta += data.totalCost;
+
+                    const pos = getOrCreatePosition(user, data.ticker);
+                    pos.sharesDelta -= data.totalQuantity;
+                    pos.costDelta -= data.totalCost;
+                    pos.reservedSharesDelta -= data.totalQuantity;
+                }
+            }
+
+            // Sort by userId for consistent lock ordering — prevents deadlocks
+            const sortedUserIds = [...userUpdates.keys()].sort();
+
+            // Build order update query using CASE to do it in one shot
+            const orderIds = [...fillMap.keys()];
+
+            const quantityCases = orderIds.map(id => `WHEN id = ? THEN filled_quantity + ?`).join(' ');
+            const costCases = orderIds.map(id => `WHEN id = ? THEN filled_cost + ?`).join(' ');
+            const statusCases = orderIds.map(id => `WHEN id = ? THEN ?`).join(' ');
+            const timestampCases = orderIds.map(id => `WHEN id = ? THEN FROM_UNIXTIME(?)`).join(' ');
+
+            const quantityValues = orderIds.flatMap(id => [id, fillMap.get(id).totalQuantity]);
+            const costValues = orderIds.flatMap(id => [id, fillMap.get(id).totalCost]);
+            const statusValues = orderIds.flatMap(id => [id, fillMap.get(id).remainingQuantity === 0 ? 'FILLED' : 'PARTIALLY_FILLED']);
+            const timestampValues = orderIds.flatMap(id => [id, fillMap.get(id).lastTimestamp]);
+
+            await connection.query(
+                `UPDATE orders SET
+                    filled_quantity = CASE ${quantityCases} ELSE filled_quantity END,
+                    filled_cost     = CASE ${costCases} ELSE filled_cost END,
+                    status          = CASE ${statusCases} ELSE status END,
+                    updated_at      = CASE ${timestampCases} ELSE updated_at END
+                WHERE id IN (?)`,
+                [...quantityValues, ...costValues, ...statusValues, ...timestampValues, orderIds]
+            );
+
+            for (const userId of sortedUserIds) {
+                const { cashDelta, reservedCashDelta, positions } = userUpdates.get(userId);
+
+                await connection.query(
+                    `UPDATE users SET 
+                        cash = cash + ?,
+                        reserved_cash = reserved_cash + ?
+                    WHERE user_id = ?`,
+                    [cashDelta, reservedCashDelta, userId]
+                );
+
+                for (const [ticker, { sharesDelta, costDelta, reservedSharesDelta }] of positions) {
                     await connection.query(
-                        `UPDATE portfolio 
-                    SET reserved_shares = reserved_shares - ?,
-                                shares = shares - ?
-                    WHERE user_id = ? AND ticker = ?`,
-                        [data.totalQuantity, data.totalQuantity, data.askUserId, data.ticker]
+                        `INSERT INTO portfolio (user_id, ticker, shares, total_cost, reserved_shares)
+                            VALUES (?, ?, ?, ?, ?)
+                            ON DUPLICATE KEY UPDATE
+                                shares = shares + ?,
+                                total_cost = total_cost + ?,
+                                reserved_shares = reserved_shares + ?`,
+                        [userId, ticker, sharesDelta, costDelta, reservedSharesDelta,
+                            sharesDelta, costDelta, reservedSharesDelta]
                     );
 
-                    // Remove from portfolio if no more shares
-                    await connection.query(`DELETE FROM portfolio 
-                                        WHERE user_id = ? AND ticker = ? AND shares <= 0;`,
-                        [data.askUserId, data.ticker])
-
+                    // Clean up zeroed-out positions
                     await connection.query(
-                        `UPDATE users 
-                    SET cash = cash + ?
-                    WHERE user_id = ?`,
-                        [data.totalCost, data.askUserId]
+                        `DELETE FROM portfolio WHERE user_id = ? AND ticker = ? AND shares <= 0`,
+                        [userId, ticker]
                     );
                 }
             }
         }
+
         catch (err) {
             console.error(err)
             connection.rollback();
@@ -866,26 +877,41 @@ subscriber.on('message', async (channel, message) => {
         finally {
             await connection.commit();
             connection.release();
-            console.log(`✅ Committed ${trades.length} order updates`);
 
-            // Now emit to all relevant users using userIdToSocket map
-            /*
-            for trade in fillMap after sorting by userId : 
-            const bidSocket = userToSocket.get(trade.bidUserId)
-            const askSocket = userToSocket.get(trade.askUserId)
-            bidSocket?.emit("ORDER_FILLED", { orderId: bidOrderId, data: fillMap.get(bidOrderId) })
-            askSocket?.emit("ORDER_FILLED", { orderId: askOrderId, data: fillMap.get(askOrderId) })
-            */
+            for (const [userId, update] of userUpdates) {
+                const socket = userToSocket.get(userId);
+                if (!socket) continue; // bot or disconnected user
+
+                // Convert positions Map to plain object for serialization
+                const positions = Object.fromEntries(update.positions);
+
+                socket.emit('PORTFOLIO_UPDATE', {
+                    cashDelta: update.cashDelta,
+                    reservedCashDelta: update.reservedCashDelta,
+                    positions,
+                });
+            }
+
+            // Send order fill updates
+            for (const [orderId, data] of fillMap) {
+                const userId = data.bidUserId || data.askUserId;
+                const socket = userToSocket.get(userId);
+                socket?.emit('ORDER_FILLED', { orderId, ...data });
+            }
         }
 
 
         function updateFillMap(orderId, remainingQuantity, filledQuantity, filledPrice, timestamp, meta, map) {
             const entry = map.get(orderId) || {
+                bidUserId: null,
+                askUserId: null,
                 totalQuantity: 0,
                 totalCost: 0,
                 remainingQuantity: 0,
                 filledQuantity: 0,
+                filledPrice: 0,
                 lastTimestamp: 0,
+                side: meta.side,
                 ticker: meta.ticker
             };
 
@@ -1023,7 +1049,7 @@ async function loadTickerMap() {
     console.log(`📦 Loaded ${tickerToId.size} ticker mappings`);
 }
 
-// I should move everything that needs to happen on server startup to a startup function
+// I should move everything that needs to happen on server startup to a separate file
 // like app.listen, redis setup, websocket setup, etc
 
 
@@ -1123,7 +1149,7 @@ async function executeOrder(order) {
 
         const toMicro = (normal) => { return normal * MICRO_UNIT }
 
-        const orderWithTimestamp = {
+        const orderForEngine = {
             id: result.insertId,
             userId,
             ticker,
@@ -1135,7 +1161,27 @@ async function executeOrder(order) {
             timestamp: Date.now()
         };
 
-        await publisher.publish('orders:new', JSON.stringify(orderWithTimestamp));
+        const orderForClient = {
+            orderId: result.insertId,
+            userId,
+            ticker,
+            side,
+            type,
+            price: price,
+            quantity: quantity,
+            filledQuantity: 0,
+            remainingQuantity: quantity,
+            status: "OPEN",
+            filledPrice: 0,
+            estimatedCost: estimatedCost,
+            timestamp: Date.now()
+        }
+
+        await publisher.publish('orders:new', JSON.stringify(orderForEngine));
+
+        const socket = userToSocket.get(userId)
+
+        socket?.emit("ORDER_PLACED", orderForClient)
 
         return {
             success: true,
@@ -1182,10 +1228,10 @@ async function placeOrder(order) {
         statusCode: 400
     };
 }
-async function startBot() {
+async function startBots() {
     const [rows] = await db.query(
-        'SELECT user_id FROM users WHERE username = ? OR username = ?',
-        ['market_bot', 'test2']
+        'SELECT user_id FROM users WHERE username = ? OR username = ? OR username LIKE ?',
+        ['market_bot', 'orderbot', 'testuser']
     );
 
     if (!rows[0]) {
@@ -1223,13 +1269,12 @@ async function startBot() {
             side,
             type,
             quantity,
-            price: type === "LIMIT" ? price : undefined
+            price: type === "LIMIT" ? price : null
         });
-    }, 500);
+    }, 10);
 }
-
 
 await loadTickerMap();
 await initializeDepthCache();
 await recoverUnfilledOrders();
-//startBot();
+startBots();
