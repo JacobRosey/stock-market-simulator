@@ -1,10 +1,30 @@
+/* Ensure the entire portfolio page has a constrained height */
+.portfolio-container {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: #0f172a;
+}
+
+/* Top navigation should not shrink */
+.top-nav {
+    flex-shrink: 0;
+}
+
+/* Headlines banner should not shrink */
+.headlines-banner {
+    flex-shrink: 0;
+}
+
+/* Portfolio content takes remaining space and scrolls */
 .portfolio-content {
     flex: 1;
+    min-height: 0;  /* 👈 CRITICAL: allows flex child to shrink below content height */
     padding: 2rem;
     overflow-y: auto;
     background: #0f172a;
 }
-
 .portfolio-summary {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
