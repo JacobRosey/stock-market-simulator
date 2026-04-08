@@ -1,7 +1,7 @@
 // OrderBook.tsx
 import { useState, useEffect } from 'react';
 import { placeOrder } from '../../../api';
-import type { Order, OrderRequestData, OrderSide, OrderType, Ticker } from '../../../types';
+import type { OrderRequestData, OrderSide, OrderType, Ticker } from '../../../types';
 import { useWebSocket } from '../../../context/WebSocketContext';
 import './orderbook.css'
 
@@ -21,7 +21,7 @@ export default function OrderBook({ selectedTicker }: OrderBookProps) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const { getDepthForTicker, subscribeToTicker, addOrder, isConnected } = useWebSocket();
+  const { getDepthForTicker, subscribeToTicker, isConnected } = useWebSocket();
   const depth = getDepthForTicker(selectedTicker as Ticker);
 
   // Set default values for initial page load 
@@ -87,29 +87,6 @@ export default function OrderBook({ selectedTicker }: OrderBookProps) {
         setError(response.message)
       } else {
         console.log(`order placed successfully: `, response)
-        const result = await response;
-
-
-        const newOrder: Order = {
-          orderId: result.orderId,
-          userId: result.userId,
-          ticker: result.ticker,
-          side: result.side,
-          type: result.type,
-          price: result.price,
-          quantity: result.quantity,
-          filledQuantity: 0,
-          remainingQuantity: result.quantity,
-          status: 'OPEN',
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          estimatedAmount: result.estimatedAmount,
-          filledPrice: 0
-        };
-
-        addOrder(newOrder);
-
-
         setSuccess(response.message);
       }
 
