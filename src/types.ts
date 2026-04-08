@@ -63,6 +63,14 @@ export interface Order {
     filledPrice: number;             // total cost of filled portion
 }
 
+export interface OrderFillUpdate {
+    orderId: number;
+    filledQuantity: number;
+    filledPrice: number;
+    remainingQuantity: number;
+    status: OrderStatus;
+}
+
 export interface OrderRequestData {
     ticker: Ticker;
     side: OrderSide;
@@ -93,7 +101,20 @@ export interface Holding {
 }
 
 export interface Portfolio {
+    cash: number;
     positions: Position[];
+}
+
+export interface PositionDelta {
+    sharesDelta: number;
+    costDelta: number;
+    reservedSharesDelta: number;
+}
+
+export interface PortfolioUpdate {
+    cashDelta: number;
+    reservedCashDelta: number;
+    positions: Record<string, PositionDelta>; // ticker -> deltas
 }
 
 export interface Position {
@@ -160,8 +181,9 @@ export interface WebSocketContextValue {
     getDepthForTicker: (ticker: Ticker) => OrderDepth | undefined; 
     attemptOrderCancellation: (orderId: Number, ticker: Ticker, type: OrderType, side: OrderSide) => void;
     addOrder: (order: Order) => void;
-
+    
     // Connection status
+    portfolioLoading: boolean;
     isConnected: boolean;
     ordersLoading: boolean;
     lastMessageAt: number | null;
