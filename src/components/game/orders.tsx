@@ -55,7 +55,7 @@ export default function Orders() {
                                         <td className={order.side.toLowerCase()}>
                                             {order.side}
                                         </td>
-                                        <td>{order.price || 'Market'}</td>
+                                        <td>{order.price ? `$${order.price.toFixed(2)}` : 'Market'}</td>
                                         <td>{order.quantity}</td>
                                         <td>{order.filledQuantity}</td>
                                         <td>{order.status}</td>
