@@ -1,35 +1,19 @@
 import { Link } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import { useState, useEffect } from 'react'
-import { fetchPortfolio } from '../../api'
+import { useWebSocket } from '../../context/WebSocketContext'
 import type { Position } from '../../types'
 import './portfolio.css'
 import Headlines from './dashboard-components/headlines'
 
 
 export default function Portfolio() {
-  const { logout } = useAuth()
-  const [positions, setPositions] = useState<Position[]>([])
-  const [cash, setCash] = useState<number>(0)
-  const [loading, setLoading] = useState(true)
+    const { logout } = useAuth();
+    const { portfolio, portfolioLoading } = useWebSocket();
 
-  useEffect(() => {
-    const loadPortfolio = async () => {
-      try {
-        const data = await fetchPortfolio();
-        if (data) {
-          setPositions(data.positions || [])
-          setCash(data.cash || 0)
-        }
-      } catch (error) {
-        console.error('Failed to fetch portfolio:', error)
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    loadPortfolio()
-  }, [])
+    // Derive positions and cash directly from context
+    const positions = portfolio?.positions ?? [];
+    const cash = portfolio?.cash ?? 0;
 
   const handleLogout = async () => {
     await logout()
@@ -39,7 +23,7 @@ export default function Portfolio() {
   const totalGainLoss = positions.reduce((sum, pos) => sum + pos.gainLoss, 0)
   const totalGainLossPercent = totalValue > 0 ? (totalGainLoss / (totalValue - totalGainLoss)) * 100 : 0
 
-  if (loading) {
+  if (portfolioLoading) {
     return (
       <div className="dashboard-container">
         <nav className="top-nav">
