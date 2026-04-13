@@ -14,11 +14,12 @@ import type {
     OrderSide,
     Position,
     PortfolioUpdate,
-    OrderFillUpdate
+    OrderFillUpdate,
 } from '../types';
 
 import { useAuth } from './AuthContext';
 import { fetchPortfolio, getOrderData } from '../api';
+import ToastMessages from '../components/game/toast';
 
 const WebSocketContext = createContext<WebSocketContextValue | null>(null);
 
@@ -36,6 +37,8 @@ export const WebSocketProvider = () => {
 
     const { user, loading } = useAuth();
     const [portfolioLoading, setPortfolioLoading] = useState(true);
+
+    const [toast, setToast] = useState<OrderFillUpdate | null>(null);
 
     function applyPortfolioUpdate(prev: Portfolio, update: PortfolioUpdate, prices: Record<string, number>): Portfolio {
         const updatedPositions = prev.positions
@@ -177,7 +180,7 @@ export const WebSocketProvider = () => {
         });
 
         newSocket.on('ORDER_FILLED', (data: OrderFillUpdate) => {
-           
+
             setUserOrders(prev => prev.map(order =>
                 order.orderId === data.orderId
                     ? {
@@ -190,10 +193,9 @@ export const WebSocketProvider = () => {
                     : order
             ));
 
-            // toast message should be shown to client on order fill (and cancellation status - any non-immediate update that may or may not occur in the future)
-
-            // send message saying "Order for x of ticker y (partially if remaining > 0) filled with z quantity at price: "
-            // or something to that effect
+            // Handle message building in toast component
+            data.status = data.remainingQuantity > 0 ? "PARTIALLY_FILLED" : "FILLED"
+            setToast(data)
 
         });
 
@@ -248,11 +250,14 @@ export const WebSocketProvider = () => {
             isConnected,
             lastMessageAt,
             portfolioLoading,
+            toast,
+            clearToast: () => setToast(null),
             addOrder,
             subscribeToTicker,
             getDepthForTicker,
             attemptOrderCancellation
         }}>
+            <ToastMessages />
             <Outlet />
         </WebSocketContext.Provider>
     );

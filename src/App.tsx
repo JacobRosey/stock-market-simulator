@@ -7,6 +7,7 @@ import Register from './components/auth/register'
 import Dashboard from './components/game/dashboard'
 import Portfolio from './components/game/portfolio'
 import Orders from './components/game/orders'
+import ToastMessages from './components/game/toast'
 
 function App() {
   const { loading } = useAuth()
@@ -24,6 +25,7 @@ function App() {
       {/* Protected */}
       <Route element={<ProtectedRoute />}>
         <Route element={<WebSocketProvider />}>
+          <Route element={<ToastMessages />} />
           <Route path="/" element={<Dashboard />} />
           <Route path="/portfolio" element={<Portfolio />} />
           <Route path="/orders" element={<Orders />} />

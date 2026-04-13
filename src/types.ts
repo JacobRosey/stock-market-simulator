@@ -65,6 +65,7 @@ export interface Order {
 
 export interface OrderFillUpdate {
     orderId: number;
+    ticker: Ticker;
     filledQuantity: number;
     filledPrice: number;
     remainingQuantity: number;
@@ -181,6 +182,8 @@ export interface WebSocketContextValue {
     getDepthForTicker: (ticker: Ticker) => OrderDepth | undefined; 
     attemptOrderCancellation: (orderId: Number, ticker: Ticker, type: OrderType, side: OrderSide) => void;
     addOrder: (order: Order) => void;
+    toast: OrderFillUpdate | null;
+    clearToast: () => void;
     
     // Connection status
     portfolioLoading: boolean;

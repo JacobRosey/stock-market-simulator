@@ -403,10 +403,9 @@ app.get('/api/portfolio', async (req, res) => {
             });
         }
 
-        // Extract cash from first row (same for all rows)
         const cash = rows[0].cash;
 
-        // Filter out null positions (from LEFT JOIN with no portfolio rows)
+        // Filter out null positions
         const positions = rows
             .filter(row => row.ticker !== null)
             .map(row => ({
@@ -917,6 +916,7 @@ subscriber.on('message', async (channel, message) => {
 
             entry.totalQuantity += filledQuantity;
             entry.totalCost += filledQuantity * filledPrice;
+            entry.filledPrice = filledPrice;
             entry.remainingQuantity = remainingQuantity;
             entry.filledQuantity = filledQuantity
 
@@ -1231,7 +1231,7 @@ async function placeOrder(order) {
 async function startBots() {
     const [rows] = await db.query(
         'SELECT user_id FROM users WHERE username = ? OR username = ? OR username LIKE ?',
-        ['market_bot', 'orderbot', 'testuser']
+        ['market_bot', 'ordertest', 'testuser']
     );
 
     if (!rows[0]) {
