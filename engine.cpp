@@ -614,9 +614,6 @@ public:
 
                 // No price cross, done
                 if (bidIt->price.value() < askIt->price.value()){
-                    if(ticker == "NEXUS"){
-                        std::cout << "Could not match any orders for " << ticker << ". ask price: "  << askIt->price.value() << "bid price: " << bidIt->price.value()  << std::endl;
-                    }
                     break;
                 }
 
@@ -784,7 +781,6 @@ int main()
             
             sub.on_message([&engine](std::string channel, std::string msg) {
             try {
-                std::cout << "Channel [" << channel << "]: " << msg << std::endl;
                 auto j = json::parse(msg);
 
                 using namespace OrderUtils;
