@@ -4,6 +4,11 @@
 #include <mutex>
 #include <queue>
 #include <atomic>
+#include <array>
+#include <condition_variable>
+#include <optional>
+#include <unordered_map>
+#include <vector>
 #include <sw/redis++/redis++.h>
 #include <map>
 #include <set>
@@ -35,6 +40,8 @@ enum class OrderType
     MARKET,
     LIMIT
 };
+
+static constexpr uint64_t MICRO_UNIT = 1000000;
 
 uint64_t getTimestamp()
 {
@@ -144,6 +151,39 @@ public:
             {"ticker", ticker},
             {"filledPrice", filledPrice},
             {"filledQuantity", filledQuantity},
+            {"timestamp", timestamp}};
+    }
+};
+
+class RejectedOrder
+{
+public:
+    uint64_t orderId;
+    std::string userId;
+    std::string ticker;
+    std::string side;
+    uint64_t rejectedQuantity;
+    std::string reason;
+    uint64_t timestamp;
+
+    explicit RejectedOrder(uint64_t orderId, std::string userId, std::string ticker, Side side, uint64_t rejectedQuantity, std::string reason)
+        : orderId(orderId),
+          userId(userId),
+          ticker(ticker),
+          side(side == Side::BUY ? "BUY" : "SELL"),
+          rejectedQuantity(rejectedQuantity),
+          reason(reason),
+          timestamp(getTimestamp()) {}
+
+    json toJson() const
+    {
+        return {
+            {"orderId", orderId},
+            {"userId", userId},
+            {"ticker", ticker},
+            {"side", side},
+            {"rejectedQuantity", rejectedQuantity},
+            {"reason", reason},
             {"timestamp", timestamp}};
     }
 };
@@ -341,8 +381,10 @@ private:
     std::unordered_map<std::string, size_t> tickerToIndex;
     std::unordered_map<std::string, uint64_t> tickerPrices;
     std::queue<FilledOrder> fillQueue;
+    std::queue<RejectedOrder> rejectedQueue;
     std::mutex fillMutex;
     std::condition_variable fillCV;
+    std::mutex rejectedMutex;
     Redis redis;
 
 public:
@@ -377,6 +419,17 @@ public:
         fillCV.notify_one();
     }
 
+    void enqueueRejections(std::vector<RejectedOrder> &rejections)
+    {
+        if (rejections.empty())
+            return;
+        {
+            std::lock_guard<std::mutex> lock(rejectedMutex);
+            for (auto &r : rejections)
+                rejectedQueue.push(std::move(r));
+        }
+    }
+
     // Blocks until the we have maxBatch fills in fill queue or timeout, returns batch of filled orders
     std::vector<FilledOrder> waitAndDrain(std::chrono::milliseconds timeout, size_t maxBatch)
     {
@@ -393,11 +446,26 @@ public:
         return batch;
     }
 
+    std::vector<RejectedOrder> drainRejected(size_t maxBatch)
+    {
+        std::lock_guard<std::mutex> lock(rejectedMutex);
+
+        std::vector<RejectedOrder> batch;
+        while (!rejectedQueue.empty() && batch.size() < maxBatch)
+        {
+            batch.push_back(std::move(rejectedQueue.front()));
+            rejectedQueue.pop();
+        }
+        return batch;
+    }
+
     void publishDepthForTicker(Redis &r, const std::string &ticker, const DepthSnapshot &snap, const std::unordered_map<std::string, uint64_t> &tickerPrices)
     {                  
         json j;
         auto it = tickerPrices.find(ticker);
         j["lastPrice"] = (it != tickerPrices.end()) ? it->second  : 0.0;
+        j["asks"] = json::array();
+        j["bids"] = json::array();
 
         for (auto it = snap.topAsks.rbegin(); it != snap.topAsks.rend(); ++it){
             j["asks"].push_back({{"price", it->price }, {"quantity", it->totalQuantity }});
@@ -466,104 +534,145 @@ public:
         auto [book, mutex] = getBookAndMutex(ticker);
 
         std::vector<FilledOrder> filledOrders;
+        std::vector<RejectedOrder> rejectedOrders;
 
         {
             std::lock_guard<std::mutex> lock(mutex);
 
-            while (!book.getMarketAsks().empty() && !book.getLimitBids().empty())
+            while (!book.getMarketAsks().empty())
             {
                 Order marketAsk = book.popMarketAsk();
 
-                // Walk limit bids to find a non-self-trade counterparty
-                auto bidIt = book.getLimitBids().begin();
-                while (bidIt != book.getLimitBids().end() && bidIt->userId == marketAsk.userId)
+                while (marketAsk.remainingQuantity > 0)
                 {
-                    ++bidIt;
+                    // Walk limit bids to find a non-self-trade counterparty
+                    auto bidIt = book.getLimitBids().begin();
+                    while (bidIt != book.getLimitBids().end() && bidIt->userId == marketAsk.userId)
+                    {
+                        ++bidIt;
+                    }
+
+                    // No valid counterparty for this order; reject remainder immediately.
+                    if (bidIt == book.getLimitBids().end())
+                    {
+                        rejectedOrders.emplace_back(
+                            marketAsk.orderId,
+                            marketAsk.userId,
+                            marketAsk.ticker,
+                            marketAsk.side,
+                            marketAsk.remainingQuantity,
+                            "No fillable liquidity available for market sell");
+                        break;
+                    }
+
+                    Order limitBid = *bidIt;
+                    uint64_t filledQuantity = std::min(marketAsk.remainingQuantity, limitBid.remainingQuantity);
+
+                    marketAsk.remainingQuantity -= filledQuantity;
+                    limitBid.remainingQuantity -= filledQuantity;
+
+                    book.eraseLimitBid(bidIt);
+
+                    if (limitBid.remainingQuantity > 0)
+                        book.addBid(limitBid);
+
+                    filledOrders.emplace_back(
+                        limitBid.userId, marketAsk.userId,
+                        limitBid.orderId, marketAsk.orderId,
+                        limitBid.remainingQuantity, marketAsk.remainingQuantity,
+                        ticker, filledQuantity, limitBid.price.value());
                 }
-
-                // No valid counterparty for this order
-                // Add to rejected queue for publisher to handle
-                if (bidIt == book.getLimitBids().end())
-                {
-                    // book.addAsk(marketAsk);
-                    break;
-                }
-
-                // I need to only fill as many shares as possible without exceeding the estimated cost
-                // not just blindly fill up to the requested quantity - could result in a buyer getting more shares than they can actually pay for
-                // I already have estimatedCost in the order object so just use that
-
-                Order limitBid = *bidIt;
-                uint64_t filledQuantity = std::min(marketAsk.remainingQuantity, limitBid.remainingQuantity);
-
-                marketAsk.remainingQuantity -= filledQuantity;
-                limitBid.remainingQuantity -= filledQuantity;
-
-                book.eraseLimitBid(bidIt);
-
-                if (limitBid.remainingQuantity > 0)
-                    book.addBid(limitBid);
-
-                if (marketAsk.remainingQuantity > 0)
-                    book.addAsk(marketAsk);
-
-                filledOrders.emplace_back(
-                    limitBid.userId, marketAsk.userId,
-                    limitBid.orderId, marketAsk.orderId,
-                    limitBid.remainingQuantity, marketAsk.remainingQuantity,
-                    ticker, filledQuantity, limitBid.price.value());
             }
 
             // Market bids vs limit asks
-            while (!book.getMarketBids().empty() && !book.getLimitAsks().empty())
+            while (!book.getMarketBids().empty())
             {
-
                 Order marketBid = book.popMarketBid();
+                uint64_t remainingBudget = marketBid.estimatedCost;
+                std::string rejectionReason = "No fillable liquidity available for market buy";
 
-                auto askIt = book.getLimitAsks().begin();
-                while (askIt != book.getLimitAsks().end() && askIt->userId == marketBid.userId)
+                while (marketBid.remainingQuantity > 0)
                 {
-                    ++askIt;
+                    auto askIt = book.getLimitAsks().begin();
+                    while (askIt != book.getLimitAsks().end() && askIt->userId == marketBid.userId)
+                    {
+                        ++askIt;
+                    }
+
+                    if (askIt == book.getLimitAsks().end())
+                    {
+                        rejectionReason = "No fillable liquidity available for market buy";
+                        break;
+                    }
+
+                    Order limitAsk = *askIt;
+                    const uint64_t askPrice = limitAsk.price.value();
+
+                    if (askPrice == 0)
+                    {
+                        rejectionReason = "Invalid ask price while matching market buy";
+                        break;
+                    }
+
+                    // Quantities and prices are micro-unit encoded.
+                    // affordableMicroQty = budgetMicroDollars * MICRO_UNIT / priceMicroDollarsPerShare
+                    uint64_t maxAffordableQuantity = static_cast<uint64_t>(
+                        (static_cast<unsigned __int128>(remainingBudget) * MICRO_UNIT) / askPrice);
+
+                    // Market buys should fill only whole shares (1 share == 1e6 micro-shares).
+                    maxAffordableQuantity = (maxAffordableQuantity / MICRO_UNIT) * MICRO_UNIT;
+                    if (maxAffordableQuantity == 0)
+                    {
+                        rejectionReason = "Estimated cost limit reached before remaining quantity could be filled";
+                        break;
+                    }
+
+                    uint64_t filledQuantity = std::min(
+                        marketBid.remainingQuantity,
+                        std::min(limitAsk.remainingQuantity, maxAffordableQuantity));
+
+                    // Enforce whole-share fills for market buys.
+                    filledQuantity = (filledQuantity / MICRO_UNIT) * MICRO_UNIT;
+                    if (filledQuantity == 0)
+                    {
+                        rejectionReason = "Estimated cost limit reached before remaining quantity could be filled";
+                        break;
+                    }
+
+                    const uint64_t spent = static_cast<uint64_t>(
+                        (static_cast<unsigned __int128>(filledQuantity) * askPrice) / MICRO_UNIT);
+
+                    marketBid.remainingQuantity -= filledQuantity;
+                    remainingBudget -= spent;
+                    limitAsk.remainingQuantity -= filledQuantity;
+
+                    book.eraseLimitAsk(askIt);
+
+                    if (limitAsk.remainingQuantity > 0)
+                        book.addAsk(limitAsk);
+
+                    filledOrders.emplace_back(
+                        marketBid.userId, limitAsk.userId,
+                        marketBid.orderId, limitAsk.orderId,
+                        marketBid.remainingQuantity, limitAsk.remainingQuantity,
+                        ticker, filledQuantity, askPrice);
                 }
-
-                // Ran out of orders on ask side: should just quit here and reject remaining market bids
-                if (askIt == book.getLimitAsks().end())
-                {
-                    // book.addBid(marketBid);
-                    break;
-                }
-
-                Order limitAsk = *askIt;
-                uint64_t filledQuantity = std::min(marketBid.remainingQuantity, limitAsk.remainingQuantity);
-
-                // Here I'm assuming that while walking the book, i won't exceed the estimated cost. Incorrect.
-                // I need to just fill as many shares as possible while staying <= estimated cost for market bid
-                // and if the full quantity can't be filled, just enqueue the fill that could be achieved
-
-                // use estimatedCost to only fill shares up to that cost
-
-                marketBid.remainingQuantity -= filledQuantity;
-                limitAsk.remainingQuantity -= filledQuantity;
-
-                book.eraseLimitAsk(askIt);
-
-                if (limitAsk.remainingQuantity > 0)
-                    book.addAsk(limitAsk);
 
                 if (marketBid.remainingQuantity > 0)
-                    book.addBid(marketBid);
-
-                filledOrders.emplace_back(
-                    marketBid.userId, limitAsk.userId,
-                    marketBid.orderId, limitAsk.orderId,
-                    marketBid.remainingQuantity, limitAsk.remainingQuantity,
-                    ticker, filledQuantity, limitAsk.price.value());
+                {
+                    rejectedOrders.emplace_back(
+                        marketBid.orderId,
+                        marketBid.userId,
+                        marketBid.ticker,
+                        marketBid.side,
+                        marketBid.remainingQuantity,
+                        rejectionReason);
+                }
             }
-            book.clearMarketOrders(); // clear any remaining orders that couldn't be fulfilled
-                                      // that method should probably populate a rejectedOrders queue to be drained by publisher
         }
 
         enqueueFills(filledOrders);
+        enqueueRejections(rejectedOrders);
     }
 
     void matchWithIterators(OrderBook &book, std::set<Order, Order::CompareBids>::iterator bidIt, std::set<Order, Order::CompareAsks>::iterator askIt, std::vector<FilledOrder> &filledOrders)
@@ -870,7 +979,12 @@ int main()
             }
             publisherRedis.publish("orders:filled", batch.dump());
         }
-        // May still need to publish depth if we received an order that couldn't be immediately filled
+
+        auto rejected = engine.drainRejected(1000);
+        for (const auto &r : rejected) {
+            publisherRedis.publish("orders:rejected", r.toJson().dump());
+        }
+        
         engine.publishAllDepths(publisherRedis, tickerPrices);
     } });
 
