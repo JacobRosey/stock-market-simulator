@@ -635,6 +635,333 @@ const convertDepth = (depth) => ({
 
 let totalFills = 0;
 let totalTimeNs = 0
+const FILL_BATCH_WINDOW_MS = 20;
+const MAX_FILL_BATCH_RETRIES = 3;
+const DEADLOCK_ERROR_CODES = new Set(['ER_LOCK_DEADLOCK', 'ER_LOCK_WAIT_TIMEOUT']);
+const pendingFillTrades = [];
+let fillBatchTimer = null;
+let fillBatchInFlight = false;
+
+const sortStableIds = (ids) => [...ids].sort((a, b) => {
+    const aNum = Number(a);
+    const bNum = Number(b);
+    if (Number.isFinite(aNum) && Number.isFinite(bNum)) {
+        return aNum - bNum;
+    }
+    return String(a).localeCompare(String(b));
+});
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+function scheduleFillBatchProcessing() {
+    if (fillBatchTimer !== null || fillBatchInFlight) return;
+    fillBatchTimer = setTimeout(() => {
+        fillBatchTimer = null;
+        void flushFillBatchQueue();
+    }, FILL_BATCH_WINDOW_MS);
+}
+
+function enqueueFillTrades(trades) {
+    if (!Array.isArray(trades) || trades.length === 0) return;
+    pendingFillTrades.push(...trades);
+    scheduleFillBatchProcessing();
+}
+
+async function flushFillBatchQueue() {
+    if (fillBatchInFlight) return;
+    fillBatchInFlight = true;
+
+    try {
+        while (pendingFillTrades.length > 0) {
+            const trades = pendingFillTrades.splice(0, pendingFillTrades.length);
+            try {
+                await processFillBatchWithRetry(trades);
+            } catch (err) {
+                // Put failed work back on the front of the queue to avoid dropping fills.
+                pendingFillTrades.unshift(...trades);
+                console.error('Fill batch processing failed. Keeping trades queued for retry.', err);
+                await sleep(50);
+                break;
+            }
+        }
+    } finally {
+        fillBatchInFlight = false;
+        if (pendingFillTrades.length > 0) {
+            scheduleFillBatchProcessing();
+        }
+    }
+}
+
+async function processFillBatchWithRetry(trades) {
+    for (let attempt = 1; attempt <= MAX_FILL_BATCH_RETRIES; attempt++) {
+        try {
+            await processFillBatch(trades);
+            return;
+        } catch (err) {
+            const isDeadlock = DEADLOCK_ERROR_CODES.has(err?.code);
+            const shouldRetry = isDeadlock && attempt < MAX_FILL_BATCH_RETRIES;
+
+            if (!shouldRetry) {
+                throw err;
+            }
+
+            console.log(`Attempt ${attempt} failed. isDeadlock=${isDeadlock}, code=${err?.code}, message=${err?.message}`);
+
+            const backoffMs = attempt * 25;
+            console.warn(`Fill batch deadlock/timeout on attempt ${attempt}. Retrying in ${backoffMs}ms.`);
+            await sleep(backoffMs);
+        }
+    }
+}
+
+async function processFillBatch(trades) {
+    if (!Array.isArray(trades) || trades.length === 0) return;
+
+    const firstTimestamp = trades[0].timestamp;
+    const lastTimestamp = trades[trades.length - 1].timestamp;
+    const fillCount = trades.length;
+
+    const timeDiffNs = Math.max(0, lastTimestamp - firstTimestamp);
+    const timeDiffMs = timeDiffNs / 1_000_000;
+    const fillsPerSec = timeDiffNs > 0
+        ? (fillCount / timeDiffNs) * 1_000_000_000
+        : fillCount;
+
+    totalFills += fillCount;
+    totalTimeNs += timeDiffNs;
+    const avgFillsPerSec = totalTimeNs > 0
+        ? (totalFills / totalTimeNs) * 1_000_000_000
+        : totalFills;
+
+    console.log(`Batch: ${fillCount} fills in ${timeDiffMs.toFixed(2)}ms -> ${fillsPerSec.toFixed(0)} fills/sec | Avg: ${avgFillsPerSec.toFixed(0)} fills/sec`);
+
+    const fillMap = new Map();
+    const priceHistoryData = [];
+    const userUpdates = new Map();
+
+    for (const trade of trades) {
+        const {
+            askOrderId, askRemainingQuantity, askUserId,
+            bidOrderId, bidRemainingQuantity, bidUserId,
+            filledPrice, filledQuantity, ticker, timestamp
+        } = trade;
+
+        priceHistoryData.push({
+            ticker,
+            price: filledPrice / MICRO_UNIT,
+            timestamp,
+            tradeId: bidOrderId
+        });
+
+        updateFillMap(bidOrderId, bidRemainingQuantity / MICRO_UNIT, filledQuantity / MICRO_UNIT, filledPrice / MICRO_UNIT, timestamp, {
+            userId: bidUserId,
+            ticker,
+            side: 'bid'
+        }, fillMap);
+
+        updateFillMap(askOrderId, askRemainingQuantity / MICRO_UNIT, filledQuantity / MICRO_UNIT, filledPrice / MICRO_UNIT, timestamp, {
+            userId: askUserId,
+            ticker,
+            side: 'ask'
+        }, fillMap);
+    }
+
+    const getOrCreateUser = (userId) => {
+        if (!userUpdates.has(userId)) {
+            userUpdates.set(userId, { cashDelta: 0, reservedCashDelta: 0, positions: new Map() });
+        }
+        return userUpdates.get(userId);
+    };
+
+    const getOrCreatePosition = (userEntry, ticker) => {
+        if (!userEntry.positions.has(ticker)) {
+            userEntry.positions.set(ticker, { sharesDelta: 0, costDelta: 0, reservedSharesDelta: 0 });
+        }
+        return userEntry.positions.get(ticker);
+    };
+
+    for (const [, data] of fillMap) {
+        if (data.bidUserId) {
+            const user = getOrCreateUser(data.bidUserId);
+            user.reservedCashDelta -= data.totalCost;
+
+            const pos = getOrCreatePosition(user, data.ticker);
+            pos.sharesDelta += data.totalQuantity;
+            pos.costDelta += data.totalCost;
+        }
+
+        if (data.askUserId) {
+            const user = getOrCreateUser(data.askUserId);
+            user.cashDelta += data.totalCost;
+
+            const pos = getOrCreatePosition(user, data.ticker);
+            pos.sharesDelta -= data.totalQuantity;
+            pos.costDelta -= data.totalCost;
+            pos.reservedSharesDelta -= data.totalQuantity;
+        }
+    }
+
+    let connection;
+    let committed = false;
+    const sortedUserIds = sortStableIds([...userUpdates.keys()]);
+
+    try {
+        connection = await db.getConnection();
+        await connection.beginTransaction();
+
+        if (priceHistoryData.length > 0) {
+            const priceHistoryInserts = priceHistoryData.map(trade => [
+                tickerToId.get(trade.ticker),
+                trade.price,
+                new Date(trade.timestamp / 1000000).toISOString().slice(0, 19).replace('T', ' '),
+                trade.tradeId
+            ]);
+
+            await connection.query(
+                `INSERT INTO price_history (stock_id, price, timestamp, trade_id) 
+                 VALUES ?`,
+                [priceHistoryInserts]
+            );
+        }
+
+        const sortedOrderIds = sortStableIds([...fillMap.keys()]);
+        if (sortedOrderIds.length > 0) {
+            const quantityCases = sortedOrderIds.map(() => `WHEN id = ? THEN filled_quantity + ?`).join(' ');
+            const costCases = sortedOrderIds.map(() => `WHEN id = ? THEN filled_cost + ?`).join(' ');
+            const statusCases = sortedOrderIds.map(() => `WHEN id = ? THEN ?`).join(' ');
+            const timestampCases = sortedOrderIds.map(() => `WHEN id = ? THEN FROM_UNIXTIME(?)`).join(' ');
+
+            const quantityValues = sortedOrderIds.flatMap(id => [id, fillMap.get(id).totalQuantity]);
+            const costValues = sortedOrderIds.flatMap(id => [id, fillMap.get(id).totalCost]);
+            const statusValues = sortedOrderIds.flatMap(id => [id, fillMap.get(id).remainingQuantity === 0 ? 'FILLED' : 'PARTIALLY_FILLED']);
+            const timestampValues = sortedOrderIds.flatMap(id => [id, fillMap.get(id).lastTimestamp / 1_000_000_000]);
+
+            await connection.query(
+                `UPDATE orders SET
+                    filled_quantity = CASE ${quantityCases} ELSE filled_quantity END,
+                    filled_cost     = CASE ${costCases} ELSE filled_cost END,
+                    status          = CASE ${statusCases} ELSE status END,
+                    updated_at      = CASE ${timestampCases} ELSE updated_at END
+                WHERE id IN (?)
+                ORDER BY id`,
+                [...quantityValues, ...costValues, ...statusValues, ...timestampValues, sortedOrderIds]
+            );
+        }
+
+        if (sortedUserIds.length > 0) {
+            const userCashCases = sortedUserIds.map(() => `WHEN user_id = ? THEN cash + ?`).join(' ');
+            const userReservedCashCases = sortedUserIds.map(() => `WHEN user_id = ? THEN reserved_cash + ?`).join(' ');
+            const userCashValues = sortedUserIds.flatMap(userId => [userId, userUpdates.get(userId).cashDelta]);
+            const userReservedCashValues = sortedUserIds.flatMap(userId => [userId, userUpdates.get(userId).reservedCashDelta]);
+
+            await connection.query(
+                `UPDATE users SET
+                    cash = CASE ${userCashCases} ELSE cash END,
+                    reserved_cash = CASE ${userReservedCashCases} ELSE reserved_cash END
+                WHERE user_id IN (?)`,
+                [...userCashValues, ...userReservedCashValues, sortedUserIds]
+            );
+        }
+
+        const positionRows = [];
+        for (const userId of sortedUserIds) {
+            const positions = userUpdates.get(userId).positions;
+            const sortedTickers = [...positions.keys()].sort();
+
+            for (const ticker of sortedTickers) {
+                const { sharesDelta, costDelta, reservedSharesDelta } = positions.get(ticker);
+                positionRows.push([userId, ticker, sharesDelta, costDelta, reservedSharesDelta]);
+            }
+        }
+
+        if (positionRows.length > 0) {
+            await connection.query(
+                `INSERT INTO portfolio (user_id, ticker, shares, total_cost, reserved_shares)
+                    VALUES ?
+                    ON DUPLICATE KEY UPDATE
+                        shares = shares + VALUES(shares),
+                        total_cost = total_cost + VALUES(total_cost),
+                        reserved_shares = reserved_shares + VALUES(reserved_shares)`,
+                [positionRows]
+            );
+
+            const positionPairPlaceholders = positionRows.map(() => '(?, ?)').join(', ');
+            const positionPairValues = positionRows.flatMap(([userId, ticker]) => [userId, ticker]);
+            await connection.query(
+                `DELETE FROM portfolio
+                 WHERE (user_id, ticker) IN (${positionPairPlaceholders})
+                 AND shares <= 0`,
+                positionPairValues
+            );
+        }
+
+        await connection.commit();
+        committed = true;
+    } catch (err) {
+        if (connection) {
+            try {
+                await connection.rollback();
+            } catch (rollbackErr) {
+                console.error('Rollback failed:', rollbackErr);
+            }
+        }
+        throw err;
+    } finally {
+        connection?.release();
+    }
+
+    if (!committed) return;
+
+    for (const [userId, update] of userUpdates) {
+        const socket = userToSocket.get(userId);
+        if (!socket) continue;
+
+        const positions = Object.fromEntries(update.positions);
+        socket.emit('PORTFOLIO_UPDATE', {
+            cashDelta: update.cashDelta,
+            reservedCashDelta: update.reservedCashDelta,
+            positions,
+        });
+    }
+
+    for (const [orderId, data] of fillMap) {
+        const userId = data.bidUserId || data.askUserId;
+        const socket = userToSocket.get(userId);
+        socket?.emit('ORDER_FILLED', { orderId, ...data });
+    }
+
+    function updateFillMap(orderId, remainingQuantity, filledQuantity, filledPrice, timestamp, meta, map) {
+        const entry = map.get(orderId) || {
+            bidUserId: null,
+            askUserId: null,
+            totalQuantity: 0,
+            totalCost: 0,
+            remainingQuantity: 0,
+            filledQuantity: 0,
+            filledPrice: 0,
+            lastTimestamp: 0,
+            side: meta.side,
+            ticker: meta.ticker
+        };
+
+        entry.totalQuantity += filledQuantity;
+        entry.totalCost += filledQuantity * filledPrice;
+        entry.filledPrice = filledPrice;
+        entry.remainingQuantity = remainingQuantity;
+        entry.filledQuantity = filledQuantity;
+
+        if (meta.side === 'bid') {
+            entry.bidUserId = meta.userId;
+        } else {
+            entry.askUserId = meta.userId;
+        }
+
+        if (timestamp > entry.lastTimestamp) {
+            entry.lastTimestamp = timestamp;
+        }
+
+        map.set(orderId, entry);
+    }
+}
 
 subscriber.on('message', async (channel, message) => {
     if (channel.startsWith('orders:depth:')) {
@@ -696,241 +1023,11 @@ subscriber.on('message', async (channel, message) => {
     }
 
     if (channel === 'orders:filled') {
-
-        const trades = JSON.parse(message);
-
-        const firstTimestamp = trades[0].timestamp;
-        const lastTimestamp = trades[trades.length - 1].timestamp;
-        const fillCount = trades.length;
-
-        const timeDiffNs = lastTimestamp - firstTimestamp;
-        const timeDiffMs = timeDiffNs / 1_000_000; // convert to milliseconds
-        const fillsPerSec = (fillCount / timeDiffNs) * 1_000_000_000;
-
-        totalFills += fillCount;
-        totalTimeNs += timeDiffNs;
-        const avgFillsPerSec = (totalFills / totalTimeNs) * 1_000_000_000;
-
-        console.log(`📊 Batch: ${fillCount} fills in ${timeDiffMs.toFixed(2)}ms → ${fillsPerSec.toFixed(0)} fills/sec | Avg: ${avgFillsPerSec.toFixed(0)} fills/sec`);
-
-
-        const fillMap = new Map(); // orderId -> { totalQuantity, totalCost, remainingQuantity, lastTimestamp }
-
-        // Still need to update price history table for chart rendering
-        const priceHistoryData = [];
-
-        // Aggregate all fills by user before touching the DB
-        const userUpdates = new Map(); // userId -> { cashDelta, reservedCashDelta, positions: Map<ticker, {sharesDelta, costDelta, reservedSharesDelta}> }
-
-        for (const trade of trades) {
-            const {
-                askOrderId, askRemainingQuantity, askUserId,
-                bidOrderId, bidRemainingQuantity, bidUserId,
-                filledPrice, filledQuantity, ticker, timestamp
-            } = trade;
-
-            // For price history — store every individual fill
-            priceHistoryData.push({
-                ticker,
-                price: filledPrice / MICRO_UNIT,
-                timestamp,
-                tradeId: bidOrderId // or askOrderId
-            });
-
-            // Process bid side
-            updateFillMap(bidOrderId, bidRemainingQuantity / MICRO_UNIT, filledQuantity / MICRO_UNIT, filledPrice / MICRO_UNIT, timestamp, {
-                userId: bidUserId,
-                ticker,
-                side: 'bid'
-            }, fillMap);
-
-            // Process ask side  
-            updateFillMap(askOrderId, askRemainingQuantity / MICRO_UNIT, filledQuantity / MICRO_UNIT, filledPrice / MICRO_UNIT, timestamp, {
-                userId: askUserId,
-                ticker,
-                side: 'ask'
-            }, fillMap);
-        }
-
-        let connection;
-
         try {
-            connection = await db.getConnection();
-            await connection.beginTransaction();
-
-            if (priceHistoryData.length > 0) {
-
-                const priceHistoryInserts = priceHistoryData.map(trade => [
-                    tickerToId.get(trade.ticker),
-                    trade.price,
-                    new Date(trade.timestamp / 1000000).toISOString().slice(0, 19).replace('T', ' '),
-                    trade.tradeId
-                ]);
-
-                await connection.query(
-                    `INSERT INTO price_history (stock_id, price, timestamp, trade_id) 
-                 VALUES ?`,
-                    [priceHistoryInserts]
-                );
-            }
-
-            const getOrCreateUser = (userId) => {
-                if (!userUpdates.has(userId)) {
-                    userUpdates.set(userId, { cashDelta: 0, reservedCashDelta: 0, positions: new Map() });
-                }
-                return userUpdates.get(userId);
-            };
-
-            const getOrCreatePosition = (userEntry, ticker) => {
-                if (!userEntry.positions.has(ticker)) {
-                    userEntry.positions.set(ticker, { sharesDelta: 0, costDelta: 0, reservedSharesDelta: 0 });
-                }
-                return userEntry.positions.get(ticker);
-            };
-
-            for (const [orderId, data] of fillMap) {
-                if (data.bidUserId) {
-                    const user = getOrCreateUser(data.bidUserId);
-                    user.reservedCashDelta -= data.totalCost;
-
-                    const pos = getOrCreatePosition(user, data.ticker);
-                    pos.sharesDelta += data.totalQuantity;
-                    pos.costDelta += data.totalCost;
-                }
-
-                if (data.askUserId) {
-                    const user = getOrCreateUser(data.askUserId);
-                    user.cashDelta += data.totalCost;
-
-                    const pos = getOrCreatePosition(user, data.ticker);
-                    pos.sharesDelta -= data.totalQuantity;
-                    pos.costDelta -= data.totalCost;
-                    pos.reservedSharesDelta -= data.totalQuantity;
-                }
-            }
-
-            // Sort by userId for consistent lock ordering — prevents deadlocks
-            const sortedUserIds = [...userUpdates.keys()].sort();
-
-            // Build order update query using CASE to do it in one shot
-            const orderIds = [...fillMap.keys()];
-
-            const quantityCases = orderIds.map(id => `WHEN id = ? THEN filled_quantity + ?`).join(' ');
-            const costCases = orderIds.map(id => `WHEN id = ? THEN filled_cost + ?`).join(' ');
-            const statusCases = orderIds.map(id => `WHEN id = ? THEN ?`).join(' ');
-            const timestampCases = orderIds.map(id => `WHEN id = ? THEN FROM_UNIXTIME(?)`).join(' ');
-
-            const quantityValues = orderIds.flatMap(id => [id, fillMap.get(id).totalQuantity]);
-            const costValues = orderIds.flatMap(id => [id, fillMap.get(id).totalCost]);
-            const statusValues = orderIds.flatMap(id => [id, fillMap.get(id).remainingQuantity === 0 ? 'FILLED' : 'PARTIALLY_FILLED']);
-            const timestampValues = orderIds.flatMap(id => [id, fillMap.get(id).lastTimestamp]);
-
-            await connection.query(
-                `UPDATE orders SET
-                    filled_quantity = CASE ${quantityCases} ELSE filled_quantity END,
-                    filled_cost     = CASE ${costCases} ELSE filled_cost END,
-                    status          = CASE ${statusCases} ELSE status END,
-                    updated_at      = CASE ${timestampCases} ELSE updated_at END
-                WHERE id IN (?)`,
-                [...quantityValues, ...costValues, ...statusValues, ...timestampValues, orderIds]
-            );
-
-            for (const userId of sortedUserIds) {
-                const { cashDelta, reservedCashDelta, positions } = userUpdates.get(userId);
-
-                await connection.query(
-                    `UPDATE users SET 
-                        cash = cash + ?,
-                        reserved_cash = reserved_cash + ?
-                    WHERE user_id = ?`,
-                    [cashDelta, reservedCashDelta, userId]
-                );
-
-                for (const [ticker, { sharesDelta, costDelta, reservedSharesDelta }] of positions) {
-                    await connection.query(
-                        `INSERT INTO portfolio (user_id, ticker, shares, total_cost, reserved_shares)
-                            VALUES (?, ?, ?, ?, ?)
-                            ON DUPLICATE KEY UPDATE
-                                shares = shares + ?,
-                                total_cost = total_cost + ?,
-                                reserved_shares = reserved_shares + ?`,
-                        [userId, ticker, sharesDelta, costDelta, reservedSharesDelta,
-                            sharesDelta, costDelta, reservedSharesDelta]
-                    );
-
-                    // Clean up zeroed-out positions
-                    await connection.query(
-                        `DELETE FROM portfolio WHERE user_id = ? AND ticker = ? AND shares <= 0`,
-                        [userId, ticker]
-                    );
-                }
-            }
-        }
-
-        catch (err) {
-            console.error(err)
-            connection.rollback();
-            // try everything again? notify all users in this batch about an error?
-            // can't just let the orders disappear
-        }
-        finally {
-            await connection.commit();
-            connection.release();
-
-            for (const [userId, update] of userUpdates) {
-                const socket = userToSocket.get(userId);
-                if (!socket) continue; // bot or disconnected user
-
-                // Convert positions Map to plain object for serialization
-                const positions = Object.fromEntries(update.positions);
-
-                socket.emit('PORTFOLIO_UPDATE', {
-                    cashDelta: update.cashDelta,
-                    reservedCashDelta: update.reservedCashDelta,
-                    positions,
-                });
-            }
-
-            // Send order fill updates
-            for (const [orderId, data] of fillMap) {
-                const userId = data.bidUserId || data.askUserId;
-                const socket = userToSocket.get(userId);
-                socket?.emit('ORDER_FILLED', { orderId, ...data });
-            }
-        }
-
-
-        function updateFillMap(orderId, remainingQuantity, filledQuantity, filledPrice, timestamp, meta, map) {
-            const entry = map.get(orderId) || {
-                bidUserId: null,
-                askUserId: null,
-                totalQuantity: 0,
-                totalCost: 0,
-                remainingQuantity: 0,
-                filledQuantity: 0,
-                filledPrice: 0,
-                lastTimestamp: 0,
-                side: meta.side,
-                ticker: meta.ticker
-            };
-
-            entry.totalQuantity += filledQuantity;
-            entry.totalCost += filledQuantity * filledPrice;
-            entry.filledPrice = filledPrice;
-            entry.remainingQuantity = remainingQuantity;
-            entry.filledQuantity = filledQuantity
-
-            if (meta.side === 'bid') {
-                entry.bidUserId = meta.userId;
-            } else {
-                entry.askUserId = meta.userId;
-            }
-
-            if (timestamp > entry.lastTimestamp) {
-                entry.lastTimestamp = timestamp;
-            }
-
-            map.set(orderId, entry);
+            const trades = JSON.parse(message);
+            enqueueFillTrades(trades);
+        } catch (err) {
+            console.error('Failed to parse orders:filled payload:', err);
         }
     }
 
@@ -1046,7 +1143,7 @@ async function loadTickerMap() {
     for (const row of rows) {
         tickerToId.set(row.ticker, row.id);
     }
-    console.log(`📦 Loaded ${tickerToId.size} ticker mappings`);
+    console.log(`Loaded ${tickerToId.size} ticker mappings`);
 }
 
 // I should move everything that needs to happen on server startup to a separate file
@@ -1081,12 +1178,12 @@ async function executeOrder(order) {
 
     try {
         await connection.beginTransaction();
+        const [user] = await connection.query(
+            'SELECT cash, reserved_cash FROM users WHERE user_id = ? FOR UPDATE',
+            [userId]
+        );
 
         if (side === 'BUY') {
-            const [user] = await connection.query(
-                'SELECT cash, reserved_cash FROM users WHERE user_id = ? FOR UPDATE',
-                [userId]
-            );
 
             const availableCash = user[0].cash - user[0].reserved_cash;
 
