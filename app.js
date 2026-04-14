@@ -622,15 +622,15 @@ for (const ticker of tickers) {
 const depthCache = new Map(); // ticker -> latest depth snapshot
 
 const convertDepth = (depth) => ({
-    asks: depth.asks.map(ask => ({
+    asks: (Array.isArray(depth?.asks) ? depth.asks : []).map(ask => ({
         price: ask.price / MICRO_UNIT,
         quantity: ask.quantity / MICRO_UNIT
     })),
-    bids: depth.bids.map(bid => ({
+    bids: (Array.isArray(depth?.bids) ? depth.bids : []).map(bid => ({
         price: bid.price / MICRO_UNIT,
         quantity: bid.quantity / MICRO_UNIT
     })),
-    lastPrice: depth.lastPrice / MICRO_UNIT
+    lastPrice: (depth?.lastPrice ?? 0) / MICRO_UNIT
 });
 
 let totalFills = 0;
@@ -926,7 +926,16 @@ async function processFillBatch(trades) {
     for (const [orderId, data] of fillMap) {
         const userId = data.bidUserId || data.askUserId;
         const socket = userToSocket.get(userId);
-        socket?.emit('ORDER_FILLED', { orderId, ...data });
+        if (!socket) continue;
+
+        socket.emit('ORDER_FILLED', {
+            orderId,
+            ticker: data.ticker,
+            filledQuantity: data.totalQuantity,
+            filledPrice: data.filledPrice,
+            remainingQuantity: data.remainingQuantity,
+            status: data.remainingQuantity === 0 ? 'FILLED' : 'PARTIALLY_FILLED'
+        });
     }
 
     function updateFillMap(orderId, remainingQuantity, filledQuantity, filledPrice, timestamp, meta, map) {
@@ -1035,8 +1044,19 @@ subscriber.on('message', async (channel, message) => {
     // Or limit orders that somehow reached engine while missing required data
     if (channel == 'orders:rejected') {
         const rejected = JSON.parse(message);
-        const userId = await removeRejectedOrder(rejected.orderId)
-        console.log(`Order ${rejected.orderId} rejected for user ${userId} with reason: ${rejected.reason}`)
+        console.log(rejected);
+        const socket = userToSocket.get(rejected.userId);
+        socket?.emit('ORDER_REJECTED', {
+            orderId: rejected.orderId,
+            userId: rejected.userId,
+            ticker: rejected.ticker,
+            side: rejected.side,
+            rejectedQuantity: rejected.rejectedQuantity,
+            reason: rejected.reason,
+            timestamp: rejected.timestamp,
+            status: 'REJECTED'
+        });
+
 
     }
 });
@@ -1340,7 +1360,7 @@ async function startBots() {
         const BOT_USER_ID = rows[Math.floor(Math.random() * rows.length)].user_id;
         const ticker = tickers[Math.floor(Math.random() * tickers.length)];
         const side = Math.random() > 0.5 ? 'BUY' : 'SELL';
-        const type = Math.random() > 0.5 ? "LIMIT" : "MARKET";
+        const type =  Math.random() > 0.5 ? "LIMIT" : "MARKET";
 
         let price = null;
         if (type === "LIMIT") {
@@ -1354,7 +1374,7 @@ async function startBots() {
                     price = cache.bids[0]?.price || cache.lastPrice;
                 }
             } else {
-                price = 100; // fallback
+                price = 100; 
             }
         }
 
