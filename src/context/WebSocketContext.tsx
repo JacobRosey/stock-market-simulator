@@ -1,20 +1,20 @@
 // websocket-context.jsx
-import { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { Outlet } from 'react-router-dom';
 import { io, Socket } from 'socket.io-client';
 import type {
     Order,
     Portfolio,
-    PriceUpdate,
     NewsData,
     WebSocketContextValue,
     Ticker,
     OrderDepth,
     OrderType,
     OrderSide,
-    Position,
     PortfolioUpdate,
     OrderFillUpdate,
+    OrderRejectionUpdate,
+    ToastMessage,
 } from '../types';
 
 import { useAuth } from './AuthContext';
@@ -22,6 +22,7 @@ import { fetchPortfolio, getOrderData } from '../api';
 import ToastMessages from '../components/game/toast';
 
 const WebSocketContext = createContext<WebSocketContextValue | null>(null);
+const MIN_TOAST_VISIBLE_MS = 3000;
 
 export const WebSocketProvider = () => {
     const [socket, setSocket] = useState<Socket | null>(null);
@@ -38,7 +39,71 @@ export const WebSocketProvider = () => {
     const { user, loading } = useAuth();
     const [portfolioLoading, setPortfolioLoading] = useState(true);
 
-    const [toast, setToast] = useState<OrderFillUpdate | null>(null);
+    const [toast, setToast] = useState<ToastMessage | null>(null);
+    const toastShownAtRef = useRef<number | null>(null);
+    const currentToastRef = useRef<ToastMessage | null>(null);
+    const queuedToastsRef = useRef<ToastMessage[]>([]);
+    const queuedToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const showToast = useCallback((message: ToastMessage) => {
+        currentToastRef.current = message;
+        toastShownAtRef.current = Date.now();
+        setToast(message);
+    }, []);
+
+    const scheduleQueuedToastDrain = useCallback(() => {
+        if (queuedToastTimerRef.current || !currentToastRef.current || queuedToastsRef.current.length === 0) {
+            return;
+        }
+
+        const elapsed = Date.now() - (toastShownAtRef.current ?? Date.now());
+        const delay = Math.max(0, MIN_TOAST_VISIBLE_MS - elapsed);
+
+        queuedToastTimerRef.current = setTimeout(() => {
+            queuedToastTimerRef.current = null;
+            const nextToast = queuedToastsRef.current.shift();
+            if (!nextToast) return;
+
+            showToast(nextToast);
+            scheduleQueuedToastDrain();
+        }, delay);
+    }, [showToast]);
+
+    const enqueueToast = useCallback((message: ToastMessage) => {
+        if (!currentToastRef.current) {
+            showToast(message);
+            return;
+        }
+
+        queuedToastsRef.current.push(message);
+        scheduleQueuedToastDrain();
+    }, [scheduleQueuedToastDrain, showToast]);
+
+    const clearToast = useCallback(() => {
+        if (queuedToastTimerRef.current) {
+            clearTimeout(queuedToastTimerRef.current);
+            queuedToastTimerRef.current = null;
+        }
+
+        const nextToast = queuedToastsRef.current.shift();
+        if (nextToast) {
+            showToast(nextToast);
+            scheduleQueuedToastDrain();
+            return;
+        }
+
+        currentToastRef.current = null;
+        toastShownAtRef.current = null;
+        setToast(null);
+    }, [scheduleQueuedToastDrain, showToast]);
+
+    useEffect(() => {
+        return () => {
+            if (queuedToastTimerRef.current) {
+                clearTimeout(queuedToastTimerRef.current);
+            }
+        };
+    }, []);
 
     function applyPortfolioUpdate(prev: Portfolio, update: PortfolioUpdate, prices: Record<string, number>): Portfolio {
         const updatedPositions = prev.positions
@@ -180,12 +245,13 @@ export const WebSocketProvider = () => {
         });
 
         newSocket.on('ORDER_FILLED', (data: OrderFillUpdate) => {
+            const filledQuantity = data.filledQuantity;
 
             setUserOrders(prev => prev.map(order =>
                 order.orderId === data.orderId
                     ? {
                         ...order,
-                        filledQuantity: order.filledQuantity + data.filledQuantity,
+                        filledQuantity: order.filledQuantity + filledQuantity,
                         remainingQuantity: data.remainingQuantity,
                         status: data.remainingQuantity == 0 ? "FILLED" : "PARTIALLY_FILLED",
                         updatedAt: new Date().toISOString()
@@ -193,10 +259,33 @@ export const WebSocketProvider = () => {
                     : order
             ));
 
-            // Handle message building in toast component
-            data.status = data.remainingQuantity > 0 ? "PARTIALLY_FILLED" : "FILLED"
-            setToast(data)
+            const toastPayload: OrderFillUpdate = {
+                ...data,
+                filledQuantity,
+                status: data.remainingQuantity > 0 ? 'PARTIALLY_FILLED' : 'FILLED',
+            };
+            enqueueToast(toastPayload);
 
+        });
+
+        newSocket.on('ORDER_REJECTED', (data: OrderRejectionUpdate) => {
+            setUserOrders(prev => prev.map(order =>
+                order.orderId === data.orderId
+                    ? {
+                        ...order,
+                        remainingQuantity: data.rejectedQuantity,
+                        status: 'REJECTED',
+                        updatedAt: new Date().toISOString()
+                    }
+                    : order
+            ));
+
+            setTimeout(() => {
+                enqueueToast({
+                    ...data,
+                    status: 'REJECTED',
+                });
+            }, 50); // small delay to let fill toast appear first
         });
 
         newSocket.on('PORTFOLIO_UPDATE', (update: PortfolioUpdate) => {
@@ -213,7 +302,7 @@ export const WebSocketProvider = () => {
             setIsConnected(false);
             newSocket.close();
         };
-    }, [user?.user_id, loading]);
+    }, [user?.user_id, loading, enqueueToast]);
 
 
     const subscribeToTicker = useCallback((ticker: Ticker) => {
@@ -251,7 +340,7 @@ export const WebSocketProvider = () => {
             lastMessageAt,
             portfolioLoading,
             toast,
-            clearToast: () => setToast(null),
+            clearToast,
             addOrder,
             subscribeToTicker,
             getDepthForTicker,

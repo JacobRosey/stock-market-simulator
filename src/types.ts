@@ -69,8 +69,25 @@ export interface OrderFillUpdate {
     filledQuantity: number;
     filledPrice: number;
     remainingQuantity: number;
-    status: OrderStatus;
+    status: 'FILLED' | 'PARTIALLY_FILLED';
 }
+
+export interface OrderRejectionUpdate {
+    orderId: number;
+    userId: string;
+    ticker: Ticker;
+    side: OrderSide;
+    rejectedQuantity: number;
+    reason: string;
+    timestamp: number;
+    status: 'REJECTED';
+}
+
+export type ToastMessage = OrderFillUpdate | OrderRejectionUpdate;
+
+export const isOrderFillUpdate = (msg: ToastMessage): msg is OrderFillUpdate => {
+    return msg.status === 'FILLED' || msg.status === 'PARTIALLY_FILLED';
+};
 
 export interface OrderRequestData {
     ticker: Ticker;
@@ -182,7 +199,7 @@ export interface WebSocketContextValue {
     getDepthForTicker: (ticker: Ticker) => OrderDepth | undefined; 
     attemptOrderCancellation: (orderId: Number, ticker: Ticker, type: OrderType, side: OrderSide) => void;
     addOrder: (order: Order) => void;
-    toast: OrderFillUpdate | null;
+    toast: ToastMessage | null;
     clearToast: () => void;
     
     // Connection status
