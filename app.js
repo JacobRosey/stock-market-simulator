@@ -9,6 +9,7 @@ import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser'
 import { createServer } from 'http'
 import { Server } from 'socket.io'
+import { startNewsGenerator } from './news/newsEngine.js';
 
 dotenv.config();
 
@@ -507,6 +508,7 @@ const io = new Server(server, {
 
 const userToSocket = new Map();
 const socketToUser = new Map();
+let latestGeneratedNews = null;
 
 io.on('connection', (socket) => {
 
@@ -514,6 +516,10 @@ io.on('connection', (socket) => {
         userToSocket.set(userId, socket);
         socketToUser.set(socket.id, userId)
         console.log(`User ${socketToUser.get(socket.id)} registered with socket ${userToSocket.get(userId).id}`);
+
+        if (latestGeneratedNews) {
+            socket.emit('NEWS', latestGeneratedNews);
+        }
     });
 
     // Handle ticker subscription
@@ -1394,4 +1400,11 @@ async function startBots() {
 await loadTickerMap();
 await initializeDepthCache();
 await recoverUnfilledOrders();
-startBots();
+//startBots();
+startNewsGenerator(io, {
+    intervalMs: 5_000,
+    emitOnStart: true,
+    onEmit: (payload) => {
+        latestGeneratedNews = payload;
+    }
+});

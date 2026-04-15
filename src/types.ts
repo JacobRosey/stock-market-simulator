@@ -17,6 +17,10 @@ export const TICKERS = [
     'GMED', 'BIOV', 'GENH', 'NEURO'
 ] as const;
 
+export type CompanyTypes =
+    | "Stable" | "Risky"
+    | "Cyclical" | "Moderate";
+
 export interface Stock {
     ticker: Ticker;
     companyName: string;
@@ -162,7 +166,22 @@ export interface Bot {
     name: string;
     strategy: BotStrategy;
     description: string;
-    avatar?: string;
+    avatar?: string; // path to avatar image
+}
+
+// ===== SENTIMENT TYPES =====
+
+export interface NewsData {
+    headline: string;
+    sentiment: number;  // -10 to 10 : avoid floating point operations
+    affectedTickers?: Ticker[];
+    affectedSectors?: Sector[];
+    global: boolean; // does this effect the entire market or just one sector / company?
+    stimulus: boolean; // does this inject cash into user accounts?
+    isStimulus: boolean; // explicit flag for backend stimulus handling
+    negativelyEffected: CompanyTypes[];
+    positivelyEffected: CompanyTypes[];
+    timestamp: number;
 }
 
 // ===== WEBSOCKET TYPES =====
@@ -170,14 +189,6 @@ export interface WebSocketMessage<T = any> {
     type: 'PRICE_UPDATE' | 'ORDER_FILLED' | 'PORTFOLIO_UPDATE' | 'NEWS' | 'TRADE_EXECUTED';
     data: T;
     timestamp: number;
-}
-
-export interface NewsData {
-    headline: string;
-    sentiment: number;  // -10 to 10 : avoid floating point operations
-    affectedTickers?: Ticker[];
-    affectedSectors?: Sector[];
-    global: boolean;
 }
 
 // ===== API RESPONSE TYPES =====

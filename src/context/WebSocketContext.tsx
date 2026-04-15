@@ -225,7 +225,7 @@ export const WebSocketProvider = () => {
                 }
                 return newPrice;
             });
-            //setLastMessageAt(Date.now());
+            setLastMessageAt(Date.now());
         });
 
         newSocket.on('connect_error', (error) => {
@@ -293,6 +293,11 @@ export const WebSocketProvider = () => {
                 if (!prev) return prev;
                 return applyPortfolioUpdate(prev, update, prices);
             });
+        });
+
+        newSocket.on('NEWS', (data: NewsData) => {
+            setLatestNews(data);
+            setLastMessageAt(Date.now());
         });
 
         setSocket(newSocket);
