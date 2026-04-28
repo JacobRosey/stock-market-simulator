@@ -10,6 +10,7 @@
     "compile:cpp": "set PATH=C:\\msys64\\ucrt64\\bin;%PATH% && cd /d C:\\Users\\jrose\\Desktop\\paper-trader\\market-simulator && g++ engine.cpp -o engine.exe -lredis++ -lhiredis",
     "dev:redis": "C:\\redis\\redis-server.exe",
     "dev:all": "npm run compile:cpp && concurrently \"npm run dev:redis\" \"npm run dev\" \"npm run dev:backend\" \"npm run dev:cpp\"",
+    "season:restart": "node scripts/restart-season.js",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"

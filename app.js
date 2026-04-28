@@ -10,6 +10,7 @@ import cookieParser from 'cookie-parser'
 import { createServer } from 'http'
 import { Server } from 'socket.io'
 import { startNewsGenerator } from './news/newsEngine.js';
+import { createBotManager } from './bots/BotManager.js';
 
 dotenv.config();
 
@@ -484,6 +485,16 @@ app.get('/api/order-data', async (req, res) => {
     }
 });
 
+app.get('/api/leaderboard', async (req, res) => {
+    try {
+        const rankings = await buildLeaderboard();
+        res.json(rankings);
+    } catch (error) {
+        console.error('Error fetching leaderboard:', error);
+        res.status(500).json({ error: 'Failed to fetch leaderboard data' });
+    }
+});
+
 app.listen(SERVER_PORT, () => {
     console.log(`Server running on port ${SERVER_PORT}`);
 });
@@ -509,6 +520,7 @@ const io = new Server(server, {
 const userToSocket = new Map();
 const socketToUser = new Map();
 let latestGeneratedNews = null;
+let botManager = null;
 
 io.on('connection', (socket) => {
 
@@ -519,6 +531,12 @@ io.on('connection', (socket) => {
 
         if (latestGeneratedNews) {
             socket.emit('NEWS', latestGeneratedNews);
+        }
+
+        if (latestLeaderboard.length > 0) {
+            socket.emit('LEADERBOARD_UPDATE', latestLeaderboard);
+        } else {
+            void broadcastLeaderboardUpdate();
         }
     });
 
@@ -639,6 +657,126 @@ const convertDepth = (depth) => ({
     lastPrice: (depth?.lastPrice ?? 0) / MICRO_UNIT
 });
 
+const LEADERBOARD_BROADCAST_INTERVAL_MS = 5_000;
+let latestLeaderboard = [];
+let leaderboardBroadcastTimer = null;
+let leaderboardBuildInFlight = false;
+
+function getDepthPrice(ticker) {
+    const price = Number(depthCache.get(ticker)?.lastPrice ?? 0);
+    return Number.isFinite(price) && price > 0 ? price : 0;
+}
+
+function calculatePortfolioValue({ cash = 0, positions = [] }) {
+    const holdingsValue = positions.reduce((total, position) => {
+        const shares = Number(position.shares ?? 0);
+        return total + shares * getDepthPrice(position.ticker);
+    }, 0);
+
+    return Number(cash ?? 0) + holdingsValue;
+}
+
+function toLeaderboardEntry(account) {
+    const value = calculatePortfolioValue(account);
+    const depositedCash = Number(account.depositedCash ?? 0);
+    const gain = depositedCash > 0 ? ((value - depositedCash) / depositedCash) * 100 : 0;
+
+    return {
+        username: account.username,
+        displayName: account.displayName,
+        type: account.type,
+        gain,
+        value,
+    };
+}
+
+async function getHumanLeaderboardAccounts() {
+    const [rows] = await db.query(`
+        SELECT
+            u.user_id,
+            u.username,
+            u.cash,
+            u.reserved_cash,
+            u.deposited_cash,
+            p.ticker,
+            p.shares,
+            p.reserved_shares,
+            p.total_cost
+        FROM users u
+        LEFT JOIN portfolio p ON p.user_id = u.user_id
+        WHERE u.username NOT LIKE 'bot_%'
+        ORDER BY u.username, p.ticker
+    `);
+
+    const accounts = new Map();
+    for (const row of rows) {
+        if (!accounts.has(row.user_id)) {
+            accounts.set(row.user_id, {
+                userId: row.user_id,
+                username: row.username,
+                type: 'human',
+                cash: Number(row.cash ?? 0),
+                reservedCash: Number(row.reserved_cash ?? 0),
+                depositedCash: Number(row.deposited_cash ?? 0),
+                positions: [],
+            });
+        }
+
+        if (row.ticker) {
+            accounts.get(row.user_id).positions.push({
+                ticker: row.ticker,
+                shares: Number(row.shares ?? 0),
+                reservedShares: Number(row.reserved_shares ?? 0),
+                totalCost: Number(row.total_cost ?? 0),
+            });
+        }
+    }
+
+    return [...accounts.values()];
+}
+
+async function buildLeaderboard() {
+    const humanAccounts = await getHumanLeaderboardAccounts();
+    const botAccounts = botManager?.getPortfolios?.() ?? [];
+    const entries = [...humanAccounts, ...botAccounts]
+        .map(toLeaderboardEntry)
+        .sort((a, b) => b.gain - a.gain || b.value - a.value || a.username.localeCompare(b.username));
+
+    return entries.map((entry, index) => ({
+        rank: index + 1,
+        username: entry.username,
+        displayName: entry.displayName,
+        type: entry.type,
+        gain: entry.gain,
+        value: entry.value,
+    }));
+}
+
+async function broadcastLeaderboardUpdate() {
+    if (leaderboardBuildInFlight) return;
+    leaderboardBuildInFlight = true;
+
+    try {
+        latestLeaderboard = await buildLeaderboard();
+        io.emit('LEADERBOARD_UPDATE', latestLeaderboard);
+    } catch (error) {
+        console.error('Failed to broadcast leaderboard update:', error);
+    } finally {
+        leaderboardBuildInFlight = false;
+    }
+}
+
+function startLeaderboardBroadcasts() {
+    if (leaderboardBroadcastTimer) {
+        clearInterval(leaderboardBroadcastTimer);
+    }
+
+    void broadcastLeaderboardUpdate();
+    leaderboardBroadcastTimer = setInterval(() => {
+        void broadcastLeaderboardUpdate();
+    }, LEADERBOARD_BROADCAST_INTERVAL_MS);
+}
+
 let totalFills = 0;
 let totalTimeNs = 0
 const FILL_BATCH_WINDOW_MS = 20;
@@ -738,7 +876,7 @@ async function processFillBatch(trades) {
         ? (totalFills / totalTimeNs) * 1_000_000_000
         : totalFills;
 
-    console.log(`Batch: ${fillCount} fills in ${timeDiffMs.toFixed(2)}ms -> ${fillsPerSec.toFixed(0)} fills/sec | Avg: ${avgFillsPerSec.toFixed(0)} fills/sec`);
+    //console.log(`Batch: ${fillCount} fills in ${timeDiffMs.toFixed(2)}ms -> ${fillsPerSec.toFixed(0)} fills/sec | Avg: ${avgFillsPerSec.toFixed(0)} fills/sec`);
 
     const fillMap = new Map();
     const priceHistoryData = [];
@@ -788,6 +926,7 @@ async function processFillBatch(trades) {
     for (const [, data] of fillMap) {
         if (data.bidUserId) {
             const user = getOrCreateUser(data.bidUserId);
+            user.cashDelta -= data.totalCost;
             user.reservedCashDelta -= data.totalCost;
 
             const pos = getOrCreatePosition(user, data.ticker);
@@ -944,6 +1083,8 @@ async function processFillBatch(trades) {
         });
     }
 
+    void broadcastLeaderboardUpdate();
+
     function updateFillMap(orderId, remainingQuantity, filledQuantity, filledPrice, timestamp, meta, map) {
         const entry = map.get(orderId) || {
             bidUserId: null,
@@ -1029,6 +1170,7 @@ subscriber.on('message', async (channel, message) => {
             } else {
                 console.log("Order successfully canceled!")
             }
+            botManager?.onOrderCanceled(data.orderId);
             // Send cancel confirmation to user via websocket
             // Need access to user id for that
         }
@@ -1040,6 +1182,7 @@ subscriber.on('message', async (channel, message) => {
     if (channel === 'orders:filled') {
         try {
             const trades = JSON.parse(message);
+            botManager?.onTrades(trades);
             enqueueFillTrades(trades);
         } catch (err) {
             console.error('Failed to parse orders:filled payload:', err);
@@ -1051,6 +1194,7 @@ subscriber.on('message', async (channel, message) => {
     if (channel == 'orders:rejected') {
         const rejected = JSON.parse(message);
         console.log(rejected);
+        botManager?.onOrderRejected(rejected);
         const socket = userToSocket.get(rejected.userId);
         socket?.emit('ORDER_REJECTED', {
             orderId: rejected.orderId,
@@ -1351,60 +1495,23 @@ async function placeOrder(order) {
         statusCode: 400
     };
 }
-async function startBots() {
-    const [rows] = await db.query(
-        'SELECT user_id FROM users WHERE username = ? OR username = ? OR username LIKE ?',
-        ['market_bot', 'ordertest', 'testuser']
-    );
-
-    if (!rows[0]) {
-        console.error('Bot user not found');
-        return;
-    }
-
-    setInterval(async () => {
-        const BOT_USER_ID = rows[Math.floor(Math.random() * rows.length)].user_id;
-        const ticker = tickers[Math.floor(Math.random() * tickers.length)];
-        const side = Math.random() > 0.5 ? 'BUY' : 'SELL';
-        const type =  Math.random() > 0.5 ? "LIMIT" : "MARKET";
-
-        let price = null;
-        if (type === "LIMIT") {
-            const cache = depthCache.get(ticker);
-            if (cache && cache.bids && cache.asks) {
-                if (side === "BUY") {
-                    // Buy at current price (mid) or slightly below best ask
-                    price = cache.asks[0]?.price || cache.lastPrice;
-                } else {
-                    // Sell at current price or slightly above best bid
-                    price = cache.bids[0]?.price || cache.lastPrice;
-                }
-            } else {
-                price = 100; 
-            }
-        }
-
-        const quantity = Math.round(Math.random() * 10 + 1);
-
-        await placeOrder({
-            userId: BOT_USER_ID,
-            ticker,
-            side,
-            type,
-            quantity,
-            price: type === "LIMIT" ? price : null
-        });
-    }, 10);
-}
 
 await loadTickerMap();
 await initializeDepthCache();
 await recoverUnfilledOrders();
-//startBots();
+botManager = createBotManager({
+    db,
+    placeOrder,
+    getDepth: (ticker) => depthCache.get(ticker),
+    logger: console
+});
+await botManager.start();
+startLeaderboardBroadcasts();
 startNewsGenerator(io, {
-    intervalMs: 5_000,
+    intervalMs: 30_000,
     emitOnStart: true,
     onEmit: (payload) => {
         latestGeneratedNews = payload;
+        void botManager?.onNews(payload);
     }
 });
