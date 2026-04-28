@@ -15,10 +15,11 @@ import type {
     OrderFillUpdate,
     OrderRejectionUpdate,
     ToastMessage,
+    LeaderboardEntry,
 } from '../types';
 
 import { useAuth } from './AuthContext';
-import { fetchPortfolio, getOrderData } from '../api';
+import { fetchLeaderboard, fetchPortfolio, getOrderData } from '../api';
 import ToastMessages from '../components/game/toast';
 
 const WebSocketContext = createContext<WebSocketContextValue | null>(null);
@@ -30,6 +31,7 @@ export const WebSocketProvider = () => {
     const [userOrders, setUserOrders] = useState<Order[]>([]);
     const [ordersLoading, setOrdersLoading] = useState(true)
     const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
+    const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
     const [latestNews, setLatestNews] = useState<NewsData | null>(null);
     const [isConnected, setIsConnected] = useState(false);
     const [lastMessageAt, setLastMessageAt] = useState<number | null>(null);
@@ -160,12 +162,14 @@ export const WebSocketProvider = () => {
 
         const loadInitialData = async () => {
             try {
-                const [ordersData, portfolioData] = await Promise.all([
+                const [ordersData, portfolioData, leaderboardData] = await Promise.all([
                     getOrderData(),
-                    fetchPortfolio()
+                    fetchPortfolio(),
+                    fetchLeaderboard()
                 ]);
                 setUserOrders(ordersData.orders || []);
                 setPortfolio(portfolioData);
+                setLeaderboard(leaderboardData);
             } finally {
                 setOrdersLoading(false);
                 setPortfolioLoading(false);
@@ -295,6 +299,12 @@ export const WebSocketProvider = () => {
             });
         });
 
+        newSocket.on('LEADERBOARD_UPDATE', (data: LeaderboardEntry[] | { rankings: LeaderboardEntry[] }) => {
+            const rankings = Array.isArray(data) ? data : data.rankings;
+            setLeaderboard(rankings ?? []);
+            setLastMessageAt(Date.now());
+        });
+
         newSocket.on('NEWS', (data: NewsData) => {
             setLatestNews(data);
             setLastMessageAt(Date.now());
@@ -339,6 +349,7 @@ export const WebSocketProvider = () => {
             prices,
             userOrders,
             ordersLoading,
+            leaderboard,
             latestNews,
             portfolio,
             isConnected,

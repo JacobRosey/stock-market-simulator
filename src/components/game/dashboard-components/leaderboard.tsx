@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
 import { useWebSocket } from '../../../context/WebSocketContext';
+import { useAuth } from '../../../context/AuthContext';
 import './leaderboard.css';
 
 import type { LeaderboardEntry } from '../../../types'
@@ -10,64 +10,22 @@ interface LeaderboardProps {
 }
 
 export default function Leaderboard({ currentUsername } : LeaderboardProps) {
-    const [topFive, setTopFive] = useState<LeaderboardEntry[]>([]);
-    const [currentUserRank, setCurrentUserRank] = useState<LeaderboardEntry | null>(null);
-    const [loading, setLoading] = useState(true);
-    //const { socket } = useWebSocket();
+    const { leaderboard } = useWebSocket();
+    const { user } = useAuth();
+    const activeUsername = currentUsername ?? user?.username;
+    const topFive = leaderboard.slice(0, 5);
+    const currentUserRank = activeUsername && !topFive.some(entry => entry.username === activeUsername)
+        ? leaderboard.find((entry: LeaderboardEntry) => entry.username === activeUsername) ?? null
+        : null;
+    const loading = leaderboard.length === 0;
 
-    // Fetch initial leaderboard data
-    /*
-    useEffect(() => {
-        const fetchLeaderboard = async () => {
-            try {
-                const response = await fetch('/api/leaderboard');
-                const data = await response.json();
-                
-                // Split into top 5 and current user if not in top 5
-                const top = data.slice(0, 5);
-                setTopFive(top);
-                
-                // Find current user
-                const user = data.find((entry: LeaderboardEntry) => entry.username === currentUsername);
-                if (user && !top.some(t => t.username === currentUsername)) {
-                    setCurrentUserRank(user);
-                }
-            } catch (error) {
-                console.error('Failed to fetch leaderboard:', error);
-            } finally {
-                setLoading(false);
-            }
-        };
-
-        fetchLeaderboard();
-    }, [currentUsername]);
-
-    // Listen for real-time leaderboard updates
-    useEffect(() => {
-        if (!socket) return;
-
-        const handleLeaderboardUpdate = (data: any) => {
-            const top = data.slice(0, 5);
-            setTopFive(top);
-            
-            const user = data.find((entry: LeaderboardEntry) => entry.username === currentUsername);
-            if (user && !top.some(t => t.username === currentUsername)) {
-                setCurrentUserRank(user);
-            } else {
-                setCurrentUserRank(null);
-            }
-        };
-
-        socket.on('LEADERBOARD_UPDATE', handleLeaderboardUpdate);
-
-        return () => {
-            socket.off('LEADERBOARD_UPDATE', handleLeaderboardUpdate);
-        };
-    }, [socket, currentUsername]);
-    */
     const formatGain = (gain: number): string => {
         const sign = gain >= 0 ? '+' : '';
         return `${sign}${gain.toFixed(2)}%`;
+    };
+
+    const getLeaderboardName = (entry: LeaderboardEntry): string => {
+        return entry.type === 'bot' ? entry.displayName ?? entry.username : entry.username;
     };
 
     const getAvatar = (type: 'human' | 'bot') => {
@@ -96,7 +54,7 @@ export default function Leaderboard({ currentUsername } : LeaderboardProps) {
                 {topFive.map((entry, index) => (
                     <div 
                         key={entry.username} 
-                        className={`leaderboard-card ${entry.type} ${entry.username === currentUsername ? 'current-user' : ''}`}
+                        className={`leaderboard-card ${entry.type} ${entry.username === activeUsername ? 'current-user' : ''}`}
                     >
                         <div className="card-rank">
                             {index === 0 && '🥇'}
@@ -111,8 +69,7 @@ export default function Leaderboard({ currentUsername } : LeaderboardProps) {
                         
                         <div className="card-info">
                             <div className="card-username">
-                                {entry.username}
-                                {entry.type === 'bot' && <span className="bot-tag">bot</span>}
+                                {getLeaderboardName(entry)}
                             </div>
                             <div className={`card-gain ${entry.gain >= 0 ? 'positive' : 'negative'}`}>
                                 {formatGain(entry.gain)}
@@ -141,7 +98,7 @@ export default function Leaderboard({ currentUsername } : LeaderboardProps) {
                             
                             <div className="card-info">
                                 <div className="card-username">
-                                    {currentUserRank.username} (you)
+                                    {getLeaderboardName(currentUserRank)} (you)
                                 </div>
                                 <div className={`card-gain ${currentUserRank.gain >= 0 ? 'positive' : 'negative'}`}>
                                     {formatGain(currentUserRank.gain)}
@@ -152,10 +109,10 @@ export default function Leaderboard({ currentUsername } : LeaderboardProps) {
                 )}
 
                 {/* Show if user not in top 5 and no currentUserRank (shouldn't happen, but just in case) */}
-                {!currentUserRank && currentUsername && (
+                {!currentUserRank && activeUsername && !topFive.some(entry => entry.username === activeUsername) && (
                     <div className="leaderboard-card outside-top not-placed">
                         <div className="card-info">
-                            <div className="card-username">{currentUsername}</div>
+                            <div className="card-username">{activeUsername}</div>
                             <div className="not-placed-text">Not yet ranked</div>
                         </div>
                     </div>

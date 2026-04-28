@@ -1,8 +1,6 @@
 import { Link } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
-import { useState, useEffect } from 'react'
 import { useWebSocket } from '../../context/WebSocketContext'
-import type { Position } from '../../types'
 import './portfolio.css'
 import Headlines from './dashboard-components/headlines'
 
@@ -11,7 +9,6 @@ export default function Portfolio() {
     const { logout } = useAuth();
     const { portfolio, portfolioLoading } = useWebSocket();
 
-    // Derive positions and cash directly from context
     const positions = portfolio?.positions ?? [];
     const cash = portfolio?.cash ?? 0;
 

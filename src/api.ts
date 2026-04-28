@@ -95,6 +95,24 @@ export const fetchPortfolio = async () => {
     }
 };
 
+export const fetchLeaderboard = async () => {
+    try {
+        const response = await fetch(`${API_BASE}/leaderboard`, {
+            credentials: 'include'
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'Failed to fetch leaderboard');
+        }
+
+        return await response.json();
+    } catch (error) {
+        console.error('Error:', error);
+        return [];
+    }
+};
+
 export const getOrderData = async () => {
     try {
         const response = await fetch(`${API_BASE}/order-data`, {

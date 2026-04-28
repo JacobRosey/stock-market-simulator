@@ -101,16 +101,6 @@
     align-items: center;
     gap: 0.5rem;
 }
-
-.bot-tag {
-    font-size: 0.6rem;
-    background: #374151;
-    color: #9ca3af;
-    padding: 0.15rem 0.4rem;
-    border-radius: 4px;
-    text-transform: uppercase;
-}
-
 .card-gain {
     font-weight: 600;
     font-size: 0.9rem;
