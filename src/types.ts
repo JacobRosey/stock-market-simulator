@@ -153,6 +153,7 @@ export interface Position {
 export interface LeaderboardEntry {
     rank: number;
     username: string;
+    displayName?: string;
     type: 'human' | 'bot';
     gain: number; // Portfolio % gain (e.g., 15.4 for +15.4%, -2.3 for -2.3%)
     value?: number; // Optional absolute value for sorting
@@ -186,7 +187,7 @@ export interface NewsData {
 
 // ===== WEBSOCKET TYPES =====
 export interface WebSocketMessage<T = any> {
-    type: 'PRICE_UPDATE' | 'ORDER_FILLED' | 'PORTFOLIO_UPDATE' | 'NEWS' | 'TRADE_EXECUTED';
+    type: 'PRICE_UPDATE' | 'ORDER_FILLED' | 'PORTFOLIO_UPDATE' | 'NEWS' | 'TRADE_EXECUTED' | 'LEADERBOARD_UPDATE';
     data: T;
     timestamp: number;
 }
@@ -205,6 +206,7 @@ export interface WebSocketContextValue {
     prices: Record<Ticker, number>;
     userOrders: Order[];
     portfolio: Portfolio | null;
+    leaderboard: LeaderboardEntry[];
     latestNews: NewsData | null;
     subscribeToTicker: (ticker: Ticker) => void;  
     getDepthForTicker: (ticker: Ticker) => OrderDepth | undefined; 
