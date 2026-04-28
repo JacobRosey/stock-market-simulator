@@ -44,8 +44,8 @@ const STARTING_STOCKS = [
 
 const BOT_PORTFOLIO_ROWS = STARTING_STOCKS.map(({ ticker, price }) => ({
     ticker,
-    shares: 100,
-    totalCost: price * 100,
+    shares: 1000,
+    totalCost: price * 1000,
 }));
 
 const TOTAL_STARTING_POSITION_COST = BOT_PORTFOLIO_ROWS.reduce((total, row) => total + row.totalCost, 0);
