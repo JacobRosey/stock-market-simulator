@@ -11,7 +11,7 @@ INSERT INTO stocks (ticker, name, sector, description, initial_price) VALUES
 ('AGB', 'Atlantic Global Bank', 'FINANCE', 'Megabank, too big to fail, stable but boring, dividend payer', 180.00),
 ('CRC', 'Crossroads Capital', 'FINANCE', 'Aggressive investment firm, high returns in good markets, crashes in bad', 55.00),
 ('SGI', 'SureGuard Insurance', 'FINANCE', 'Insurance giant, predictable premiums, boring but steady', 120.00),
-('FTIN', 'FinTech Innovations', 'FINANCE', 'Disruptive fintech startup, high growth, unproven long-term', 40.00),
+('FINT', 'FinTech Innovations', 'FINANCE', 'Disruptive fintech startup, high growth, unproven long-term', 40.00),
 
 -- RETAIL
 ('MEGA', 'MegaMart', 'RETAIL', 'Big box retailer, massive scale, thin margins, recession-resistant', 90.00),
