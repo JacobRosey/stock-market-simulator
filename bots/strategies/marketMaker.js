@@ -12,8 +12,8 @@ const thresholds = {
     cyclical: 1,
 };
 
-const TARGET_ACTIVE_BUY_VOLUME = 20;
-const TARGET_ACTIVE_SELL_VOLUME = 20;
+const TARGET_ACTIVE_BUY_VOLUME = 50;
+const TARGET_ACTIVE_SELL_VOLUME = 50;
 const MAX_SELL_INVENTORY_SHARE = 0.25;
 
 function buildQuote(getDepth, ticker, side) {

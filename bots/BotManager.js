@@ -5,8 +5,8 @@ const MICRO_UNIT = 1e6;
 const MIN_SENTIMENT = -10;
 const MAX_SENTIMENT = 10;
 const SENTIMENT_DECAY_INTERVAL_MS = 20_000;
-const MIN_SENTIMENT_ACTION_COOLDOWN_MS = 8_000;
-const MAX_SENTIMENT_ACTION_COOLDOWN_MS = 18_000;
+const MIN_SENTIMENT_ACTION_COOLDOWN_MS = 45_000;
+const MAX_SENTIMENT_ACTION_COOLDOWN_MS = 60_000;
 
 function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));

@@ -1,12 +1,12 @@
 import { buildLimitPrice, getNewsTickers, randomizeQuantity, scoreTickerForNews, scoreTickerForSentiment } from './shared.js';
 
 const thresholds = {
-    TECH: { buy: -0.35, sell: 0.35 },
-    PHARMA: { buy: -0.45, sell: 0.35 },
-    MANUFACTURING: { buy: -0.35, sell: 0.3 },
-    FINANCE: { buy: -0.3, sell: 0.3 },
-    RETAIL: { buy: -0.4, sell: 0.35 },
-    default: { buy: -0.4, sell: 0.4 },
+    TECH: { buy: -4, sell: 4 },
+    PHARMA: { buy: -4, sell: 4 },
+    MANUFACTURING: { buy: -4, sell: 4 },
+    FINANCE: { buy: -4, sell: 4 },
+    RETAIL: { buy: -4, sell: 4 },
+    default: { buy: -4, sell: 4 },
     stable: 0.9,
     risky: 1.6,
     cyclical: 1.1,

@@ -1,12 +1,13 @@
 import { buildLimitPrice, randomChoice, randomInt } from './shared.js';
 
+// These thresholds aren't used since this bot just trades randomly
 const thresholds = {
-    TECH: { buy: Math.random(), sell: -Math.random() },
-    PHARMA: { buy: Math.random(), sell: -Math.random() },
-    MANUFACTURING: { buy: Math.random(), sell: -Math.random() },
-    FINANCE: { buy: Math.random(), sell: -Math.random() },
-    RETAIL: { buy: Math.random(), sell: -Math.random() },
-    default: { buy: 0.5, sell: -0.5 },
+    TECH: { buy: 1, sell: -1 },
+    PHARMA: { buy: 1, sell: -1 },
+    MANUFACTURING: { buy: 1, sell: -1 },
+    FINANCE: { buy: 1, sell: -1 },
+    RETAIL: { buy: 1, sell: -1 },
+    default: { buy: 1, sell: -1 },
     stable: 1,
     risky: 1,
     cyclical: 1,

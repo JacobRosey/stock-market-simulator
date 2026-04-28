@@ -1,12 +1,12 @@
 import { buildLimitPrice, randomizeQuantity, scoreTickerForSentiment, tickerMeta } from './shared.js';
 
 const thresholds = {
-    TECH: { buy: 0.45, sell: -0.45 },
-    PHARMA: { buy: 0.5, sell: -0.5 },
-    MANUFACTURING: { buy: 0.45, sell: -0.45 },
-    FINANCE: { buy: 0.4, sell: -0.4 },
-    RETAIL: { buy: 0.5, sell: -0.5 },
-    default: { buy: 0.5, sell: -0.5 },
+    TECH: { buy: 4, sell: -4 },
+    PHARMA: { buy: 5, sell: -5 },
+    MANUFACTURING: { buy: 4, sell: -4 },
+    FINANCE: { buy: 4, sell: -4 },
+    RETAIL: { buy: 5, sell: -5 },
+    default: { buy: 5, sell: -5 },
     stable: 0.5,
     risky: 1.7,
     cyclical: 1,
