@@ -6,6 +6,9 @@ dotenv.config();
 
 const STARTING_CASH = 5_000_000.00;
 const HUMAN_STARTING_CASH = 50_000.00;
+const MARKET_MAKER_USERNAME = 'bot_market_maker';
+const MARKET_MAKER_STARTING_ORDER_SIZE = 50;
+const MARKET_MAKER_STARTING_SPREAD = 0.25;
 
 const BOT_USERNAMES = [
     'bot_market_maker',
@@ -51,6 +54,14 @@ const BOT_PORTFOLIO_ROWS = STARTING_STOCKS.map(({ ticker, price }) => ({
 const TOTAL_STARTING_POSITION_COST = BOT_PORTFOLIO_ROWS.reduce((total, row) => total + row.totalCost, 0);
 const STARTING_DEPOSITED_CASH = STARTING_CASH + TOTAL_STARTING_POSITION_COST;
 
+function roundPrice(price) {
+    return Math.max(0.01, Math.round(price * 100) / 100);
+}
+
+function roundMoney(amount) {
+    return Math.round(amount * 100) / 100;
+}
+
 function createDbConnection() {
     return mysql.createConnection({
         host: process.env.DB_HOST,
@@ -93,6 +104,82 @@ async function resetBotPortfolio(connection, username) {
          VALUES ?`,
         [portfolioRows]
     );
+
+    return userId;
+}
+
+async function seedMarketMakerLiquidity(connection) {
+    const [users] = await connection.query(
+        'SELECT user_id FROM users WHERE username = ?',
+        [MARKET_MAKER_USERNAME]
+    );
+
+    if (users.length !== 1) {
+        throw new Error(`Expected one user for ${MARKET_MAKER_USERNAME}, found ${users.length}.`);
+    }
+
+    const userId = users[0].user_id;
+    const halfSpread = MARKET_MAKER_STARTING_SPREAD / 2;
+    const orderRows = [];
+    let reservedCash = 0;
+
+    for (const { ticker, price } of STARTING_STOCKS) {
+        const bidPrice = roundPrice(price - halfSpread);
+        const askPrice = roundPrice(price + halfSpread);
+        const bidEstimatedAmount = roundMoney(bidPrice * MARKET_MAKER_STARTING_ORDER_SIZE);
+        const askEstimatedAmount = roundMoney(askPrice * MARKET_MAKER_STARTING_ORDER_SIZE);
+
+        reservedCash += bidEstimatedAmount;
+
+        orderRows.push([
+            userId,
+            ticker,
+            'BUY',
+            'LIMIT',
+            bidPrice,
+            MARKET_MAKER_STARTING_ORDER_SIZE,
+            'OPEN',
+            bidEstimatedAmount,
+        ]);
+
+        orderRows.push([
+            userId,
+            ticker,
+            'SELL',
+            'LIMIT',
+            askPrice,
+            MARKET_MAKER_STARTING_ORDER_SIZE,
+            'OPEN',
+            askEstimatedAmount,
+        ]);
+    }
+
+    await connection.query(
+        `INSERT INTO orders (user_id, ticker, side, type, price, quantity, status, estimated_amount)
+         VALUES ?`,
+        [orderRows]
+    );
+
+    await connection.query(
+        `UPDATE users
+         SET reserved_cash = reserved_cash + ?
+         WHERE user_id = ?`,
+        [reservedCash, userId]
+    );
+
+    await connection.query(
+        `UPDATE portfolio
+         SET reserved_shares = reserved_shares + ?
+         WHERE user_id = ?
+         AND ticker IN (?)`,
+        [MARKET_MAKER_STARTING_ORDER_SIZE, userId, STARTING_STOCKS.map(({ ticker }) => ticker)]
+    );
+
+    return {
+        ordersSeeded: orderRows.length,
+        reservedCash,
+        reservedSharesPerTicker: MARKET_MAKER_STARTING_ORDER_SIZE,
+    };
 }
 
 async function resetStockPrices(connection) {
@@ -148,11 +235,14 @@ export async function restartSeason() {
             await resetBotPortfolio(connection, username);
         }
 
+        const marketMakerLiquidity = await seedMarketMakerLiquidity(connection);
+
         await connection.commit();
 
         return {
             botsReset: BOT_USERNAMES.length,
             stocksReset: STARTING_STOCKS.length,
+            marketMakerLiquidity,
             startingCash: STARTING_CASH,
             humanStartingCash: HUMAN_STARTING_CASH,
             startingDepositedCash: STARTING_DEPOSITED_CASH,
@@ -173,6 +263,8 @@ if (isDirectRun) {
             console.log('Season restart completed.');
             console.log(`Bots reset: ${result.botsReset}`);
             console.log(`Stocks reset: ${result.stocksReset}`);
+            console.log(`Market maker orders seeded: ${result.marketMakerLiquidity.ordersSeeded}`);
+            console.log(`Market maker reserved cash: ${result.marketMakerLiquidity.reservedCash.toFixed(2)}`);
             console.log(`Starting cash: ${result.startingCash.toFixed(2)}`);
             console.log(`Human starting cash: ${result.humanStartingCash.toFixed(2)}`);
             console.log(`Deposited cash: ${result.startingDepositedCash.toFixed(2)}`);
