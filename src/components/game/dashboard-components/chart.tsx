@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { fetchPriceHistory } from '../../../api';
 import { useWebSocket } from '../../../context/WebSocketContext';
 import type { Ticker } from '../../../types';
@@ -13,8 +13,44 @@ interface PricePoint {
   price: number;
 }
 
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function formatShares(shares: number) {
+  return Number.isInteger(shares) ? shares.toString() : shares.toFixed(4).replace(/\.?0+$/, '');
+}
+
+function PositionLineLabel({ viewBox, label }: { viewBox?: any; label: string }) {
+  if (!viewBox) return null;
+
+  const x = Number(viewBox.x ?? 0) + Number(viewBox.width ?? 0) - 8;
+  const y = Number(viewBox.y ?? 0);
+
+  return (
+    <g>
+      <rect
+        x={x - 118}
+        y={y - 12}
+        width={118}
+        height={22}
+        rx={4}
+        className="position-line-label-bg"
+      />
+      <text
+        x={x - 8}
+        y={y + 4}
+        textAnchor="end"
+        className="position-line-label"
+      >
+        {label}
+      </text>
+    </g>
+  );
+}
+
 export default function Chart({ ticker }: ChartProps) {
-  const { prices } = useWebSocket();
+  const { prices, portfolio } = useWebSocket();
   const [history, setHistory] = useState<PricePoint[]>([]);
   const [showInfo, setShowInfo] = useState(false);
   const [range, setRange] = useState('1m');
@@ -148,6 +184,35 @@ export default function Chart({ ticker }: ChartProps) {
   };
 
   const currentPrice = prices?.[ticker] ?? stats?.current ?? 0;
+  const position = portfolio?.positions.find(pos => pos.ticker === ticker && pos.shares > 0);
+  const positionLabel = position
+    ? `POS: ${formatShares(position.shares)} @ ${position.averagePrice.toFixed(2)}`
+    : null;
+  const priceDomain = useMemo<[number, number]>(() => {
+    const values = history
+      .map(point => Number(point.price))
+      .filter(price => Number.isFinite(price) && price > 0);
+
+    if (Number.isFinite(currentPrice) && currentPrice > 0) {
+      values.push(currentPrice);
+    }
+
+    if (values.length === 0) {
+      return [0, 1];
+    }
+
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    if (min === max) {
+      const padding = Math.max(1, min * 0.01);
+      return [min - padding, max + padding];
+    }
+
+    return [min, max];
+  }, [currentPrice, history]);
+  const positionLineY = position
+    ? clamp(position.averagePrice, priceDomain[0], priceDomain[1])
+    : null;
 
 
   const formattedPrice = Number(currentPrice).toFixed(2);
@@ -221,7 +286,7 @@ export default function Chart({ ticker }: ChartProps) {
               tickFormatter={formatXAxis}
             />
             <YAxis
-              domain={['auto', 'auto']}
+              domain={priceDomain}
               tickFormatter={(price: number) => `$${price}`}
             />
             <Tooltip
@@ -236,6 +301,16 @@ export default function Chart({ ticker }: ChartProps) {
               isAnimationActive={true}
               animationDuration={300}
             />
+            {position && positionLabel && positionLineY !== null && (
+              <ReferenceLine
+                y={positionLineY}
+                stroke="#0f766e"
+                strokeDasharray="6 5"
+                strokeWidth={2}
+                ifOverflow="visible"
+                label={<PositionLineLabel label={positionLabel} />}
+              />
+            )}
           </LineChart>
         </ResponsiveContainer>
         <div className="range-selector">

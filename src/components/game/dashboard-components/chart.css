@@ -192,3 +192,18 @@
 .recharts-wrapper {
   z-index: 1;
 }
+
+.position-line-label-bg {
+  fill: #0f766e;
+  stroke: #0f766e;
+  stroke-width: 1;
+}
+
+.position-line-label {
+  fill: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  pointer-events: none;
+  z-index: 999;
+}
