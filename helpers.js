@@ -1,0 +1,1176 @@
+import { COMPANY_TYPES } from './news/headlineLibrary.js';
+
+export const tickers = [
+    'NEXUS', 'QCI', 'CLSE', 'NSMC',
+    'AGB', 'CRC', 'SGI', 'FINT',
+    'MEGA', 'TREND', 'GLG', 'CLICK',
+    'IDYN', 'AUTO', 'AERO', 'GSYS',
+    'GMED', 'BIOV', 'GENH', 'NEURO'
+];
+
+export const MICRO_UNIT = 1e6;
+
+const FAIR_VALUE_SPREAD_BY_ARCHETYPE = {
+    defensive: 0.03,
+    stable: 0.04,
+    moderate: 0.07,
+    cyclical: 0.09,
+    risky: 0.11
+};
+
+const FAIR_VALUE_SENTIMENT_MULTIPLIER_BY_ARCHETYPE = {
+    defensive: 0.25,
+    stable: 0.375,
+    moderate: 0.45,
+    cyclical: 0.5,
+    risky: 0.625
+};
+
+const LEADERBOARD_BROADCAST_INTERVAL_MS = 5_000;
+const FILL_BATCH_WINDOW_MS = 20;
+const MAX_FILL_BATCH_RETRIES = 3;
+const DEADLOCK_ERROR_CODES = new Set(['ER_LOCK_DEADLOCK', 'ER_LOCK_WAIT_TIMEOUT']);
+
+export function createMarketServices({ db }) {
+    let io = null;
+    let publisher = null;
+    let redisClient = null;
+    let userToSocket = new Map();
+    let botManager = null;
+    let latestLeaderboard = [];
+    let leaderboardBroadcastTimer = null;
+    let leaderboardBuildInFlight = false;
+    let totalFills = 0;
+    let totalTimeNs = 0;
+    let fillBatchTimer = null;
+    let fillBatchInFlight = false;
+
+    const tickerToId = new Map();
+    const stockMetaByTicker = new Map();
+    const estimatedValueByTicker = new Map();
+    const depthCache = new Map();
+    const pendingFillTrades = [];
+
+    function setIo(nextIo) {
+        io = nextIo;
+    }
+
+    function setPublisher(nextPublisher) {
+        publisher = nextPublisher;
+    }
+
+    function setRedisClient(nextRedisClient) {
+        redisClient = nextRedisClient;
+    }
+
+    function setUserToSocket(nextUserToSocket) {
+        userToSocket = nextUserToSocket;
+    }
+
+    function setBotManager(nextBotManager) {
+        botManager = nextBotManager;
+    }
+
+    function getBotManager() {
+        return botManager;
+    }
+
+    function getLatestLeaderboard() {
+        return latestLeaderboard;
+    }
+
+    function getEstimatedValueEntries() {
+        return estimatedValueByTicker.entries();
+    }
+
+    function getDepth(ticker) {
+        return depthCache.get(ticker);
+    }
+
+    function roundMoney(value) {
+        return Number(Number(value).toFixed(2));
+    }
+
+    function getCompanyProfile(ticker) {
+        return COMPANY_TYPES.find(company => company.ticker === ticker);
+    }
+
+    function createEstimatedValueRange(price, archetype = 'moderate') {
+        const basePrice = Number(price ?? 0);
+        const spread = FAIR_VALUE_SPREAD_BY_ARCHETYPE[archetype] ?? FAIR_VALUE_SPREAD_BY_ARCHETYPE.moderate;
+        const halfRange = Math.max(0.5, basePrice * spread);
+
+        return {
+            low: roundMoney(Math.max(0.01, basePrice - halfRange)),
+            high: roundMoney(basePrice + halfRange)
+        };
+    }
+
+    function getAffectedTickersForNews(news) {
+        if (news.global) return [...tickers];
+
+        if (Array.isArray(news.affectedTickers) && news.affectedTickers.length > 0) {
+            return news.affectedTickers.filter(ticker => tickers.includes(ticker));
+        }
+
+        const affected = new Set();
+        const affectedSectors = new Set(news.affectedSectors ?? []);
+
+        if (affectedSectors.size > 0) {
+            for (const company of COMPANY_TYPES) {
+                if (affectedSectors.has(company.sector)) {
+                    affected.add(company.ticker);
+                }
+            }
+        }
+
+        return [...affected].filter(ticker => tickers.includes(ticker));
+    }
+
+    function updateEstimatedValuesForNews(news) {
+        const updates = {};
+
+        for (const ticker of getAffectedTickersForNews(news)) {
+            const profile = getCompanyProfile(ticker);
+            const archetype = profile?.archetype ?? 'moderate';
+            const currentRange = estimatedValueByTicker.get(ticker)
+                ?? createEstimatedValueRange(stockMetaByTicker.get(ticker)?.price, archetype);
+            const multiplier = FAIR_VALUE_SENTIMENT_MULTIPLIER_BY_ARCHETYPE[archetype]
+                ?? FAIR_VALUE_SENTIMENT_MULTIPLIER_BY_ARCHETYPE.moderate;
+            const shift = Number(news.sentiment ?? 0) * multiplier;
+            const nextRange = {
+                low: roundMoney(Math.max(0.01, currentRange.low + shift)),
+                high: roundMoney(Math.max(0.01, currentRange.high + shift))
+            };
+
+            if (nextRange.high < nextRange.low) {
+                nextRange.high = nextRange.low;
+            }
+
+            estimatedValueByTicker.set(ticker, nextRange);
+            updates[ticker] = nextRange;
+        }
+
+        return updates;
+    }
+
+    function getStimulusCashAmount(news) {
+        if (news?.isStimulus !== true && news?.stimulus !== true) return 0;
+
+        const amount = Number(news.stimulusCashAmount ?? 0);
+        if (!Number.isFinite(amount) || amount <= 0) return 0;
+
+        return roundMoney(amount);
+    }
+
+    async function applyStimulusCashForNews(news) {
+        const cashAmount = getStimulusCashAmount(news);
+        if (cashAmount <= 0) return;
+
+        const [users] = await db.query(
+            `SELECT user_id
+             FROM users
+             WHERE username NOT LIKE 'bot_%'`
+        );
+
+        if (users.length === 0) return;
+
+        const userIds = users.map(user => user.user_id);
+
+        await db.query(
+            `UPDATE users
+             SET cash = COALESCE(cash, 0) + ?,
+                 deposited_cash = COALESCE(deposited_cash, 0) + ?
+             WHERE user_id IN (?)`,
+            [cashAmount, cashAmount, userIds]
+        );
+
+        for (const userId of userIds) {
+            const socket = userToSocket.get(userId);
+            if (!socket) continue;
+
+            socket.emit('PORTFOLIO_UPDATE', {
+                cashDelta: cashAmount,
+                reservedCashDelta: 0,
+                depositedCashDelta: cashAmount,
+                positions: {},
+            });
+        }
+
+        void broadcastLeaderboardUpdate();
+    }
+
+    const convertDepth = (depth) => ({
+        asks: (Array.isArray(depth?.asks) ? depth.asks : []).map(ask => ({
+            price: ask.price / MICRO_UNIT,
+            quantity: ask.quantity / MICRO_UNIT
+        })),
+        bids: (Array.isArray(depth?.bids) ? depth.bids : []).map(bid => ({
+            price: bid.price / MICRO_UNIT,
+            quantity: bid.quantity / MICRO_UNIT
+        })),
+        lastPrice: (depth?.lastPrice ?? 0) / MICRO_UNIT
+    });
+
+    function getDepthPrice(ticker) {
+        const price = Number(depthCache.get(ticker)?.lastPrice ?? 0);
+        return Number.isFinite(price) && price > 0 ? price : 0;
+    }
+
+    function getPortfolioCurrentPrice(ticker, fallbackPrice = 0) {
+        const depthPrice = getDepthPrice(ticker);
+        if (depthPrice > 0) return depthPrice;
+
+        const price = Number(fallbackPrice ?? 0);
+        return Number.isFinite(price) && price > 0 ? price : 0;
+    }
+
+    function calculatePortfolioValue({ cash = 0, positions = [] }) {
+        const holdingsValue = positions.reduce((total, position) => {
+            const shares = Number(position.shares ?? 0);
+            return total + shares * getDepthPrice(position.ticker);
+        }, 0);
+
+        return Number(cash ?? 0) + holdingsValue;
+    }
+
+    function toLeaderboardEntry(account) {
+        const value = calculatePortfolioValue(account);
+        const depositedCash = Number(account.depositedCash ?? 0);
+        const gain = depositedCash > 0 ? ((value - depositedCash) / depositedCash) * 100 : 0;
+
+        return {
+            username: account.username,
+            displayName: account.displayName,
+            type: account.type,
+            gain,
+            value,
+        };
+    }
+
+    async function getHumanLeaderboardAccounts() {
+        const [rows] = await db.query(`
+            SELECT
+                u.user_id,
+                u.username,
+                u.cash,
+                u.reserved_cash,
+                u.deposited_cash,
+                p.ticker,
+                p.shares,
+                p.reserved_shares,
+                p.total_cost
+            FROM users u
+            LEFT JOIN portfolio p ON p.user_id = u.user_id
+            WHERE u.username NOT LIKE 'bot_%'
+            ORDER BY u.username, p.ticker
+        `);
+
+        const accounts = new Map();
+        for (const row of rows) {
+            if (!accounts.has(row.user_id)) {
+                accounts.set(row.user_id, {
+                    userId: row.user_id,
+                    username: row.username,
+                    type: 'human',
+                    cash: Number(row.cash ?? 0),
+                    reservedCash: Number(row.reserved_cash ?? 0),
+                    depositedCash: Number(row.deposited_cash ?? 0),
+                    positions: [],
+                });
+            }
+
+            if (row.ticker) {
+                accounts.get(row.user_id).positions.push({
+                    ticker: row.ticker,
+                    shares: Number(row.shares ?? 0),
+                    reservedShares: Number(row.reserved_shares ?? 0),
+                    totalCost: Number(row.total_cost ?? 0),
+                });
+            }
+        }
+
+        return [...accounts.values()];
+    }
+
+    async function buildLeaderboard() {
+        const humanAccounts = await getHumanLeaderboardAccounts();
+        const botAccounts = botManager?.getPortfolios?.() ?? [];
+        const entries = [...humanAccounts, ...botAccounts]
+            .map(toLeaderboardEntry)
+            .sort((a, b) => b.gain - a.gain || b.value - a.value || a.username.localeCompare(b.username));
+
+        return entries.map((entry, index) => ({
+            rank: index + 1,
+            username: entry.username,
+            displayName: entry.displayName,
+            type: entry.type,
+            gain: entry.gain,
+            value: entry.value,
+        }));
+    }
+
+    async function broadcastLeaderboardUpdate() {
+        if (leaderboardBuildInFlight) return;
+        leaderboardBuildInFlight = true;
+
+        try {
+            latestLeaderboard = await buildLeaderboard();
+            io?.emit('LEADERBOARD_UPDATE', latestLeaderboard);
+        } catch (error) {
+            console.error('Failed to broadcast leaderboard update:', error);
+        } finally {
+            leaderboardBuildInFlight = false;
+        }
+    }
+
+    function startLeaderboardBroadcasts() {
+        if (leaderboardBroadcastTimer) {
+            clearInterval(leaderboardBroadcastTimer);
+        }
+
+        void broadcastLeaderboardUpdate();
+        leaderboardBroadcastTimer = setInterval(() => {
+            void broadcastLeaderboardUpdate();
+        }, LEADERBOARD_BROADCAST_INTERVAL_MS);
+    }
+
+    const sortStableIds = (ids) => [...ids].sort((a, b) => {
+        const aNum = Number(a);
+        const bNum = Number(b);
+        if (Number.isFinite(aNum) && Number.isFinite(bNum)) {
+            return aNum - bNum;
+        }
+        return String(a).localeCompare(String(b));
+    });
+
+    const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+    function scheduleFillBatchProcessing() {
+        if (fillBatchTimer !== null || fillBatchInFlight) return;
+        fillBatchTimer = setTimeout(() => {
+            fillBatchTimer = null;
+            void flushFillBatchQueue();
+        }, FILL_BATCH_WINDOW_MS);
+    }
+
+    function enqueueFillTrades(trades) {
+        if (!Array.isArray(trades) || trades.length === 0) return;
+        pendingFillTrades.push(...trades);
+        scheduleFillBatchProcessing();
+    }
+
+    async function flushFillBatchQueue() {
+        if (fillBatchInFlight) return;
+        fillBatchInFlight = true;
+
+        try {
+            while (pendingFillTrades.length > 0) {
+                const trades = pendingFillTrades.splice(0, pendingFillTrades.length);
+                try {
+                    await processFillBatchWithRetry(trades);
+                } catch (err) {
+                    pendingFillTrades.unshift(...trades);
+                    console.error('Fill batch processing failed. Keeping trades queued for retry.', err);
+                    await sleep(50);
+                    break;
+                }
+            }
+        } finally {
+            fillBatchInFlight = false;
+            if (pendingFillTrades.length > 0) {
+                scheduleFillBatchProcessing();
+            }
+        }
+    }
+
+    async function processFillBatchWithRetry(trades) {
+        for (let attempt = 1; attempt <= MAX_FILL_BATCH_RETRIES; attempt++) {
+            try {
+                await processFillBatch(trades);
+                return;
+            } catch (err) {
+                const isDeadlock = DEADLOCK_ERROR_CODES.has(err?.code);
+                const shouldRetry = isDeadlock && attempt < MAX_FILL_BATCH_RETRIES;
+
+                if (!shouldRetry) {
+                    throw err;
+                }
+
+                console.log(`Attempt ${attempt} failed. isDeadlock=${isDeadlock}, code=${err?.code}, message=${err?.message}`);
+
+                const backoffMs = attempt * 25;
+                console.warn(`Fill batch deadlock/timeout on attempt ${attempt}. Retrying in ${backoffMs}ms.`);
+                await sleep(backoffMs);
+            }
+        }
+    }
+
+    async function processFillBatch(trades) {
+        if (!Array.isArray(trades) || trades.length === 0) return;
+
+        const firstTimestamp = trades[0].timestamp;
+        const lastTimestamp = trades[trades.length - 1].timestamp;
+        const fillCount = trades.length;
+
+        const timeDiffNs = Math.max(0, lastTimestamp - firstTimestamp);
+        const timeDiffMs = timeDiffNs / 1_000_000;
+        const fillsPerSec = timeDiffNs > 0
+            ? (fillCount / timeDiffNs) * 1_000_000_000
+            : fillCount;
+
+        totalFills += fillCount;
+        totalTimeNs += timeDiffNs;
+        const avgFillsPerSec = totalTimeNs > 0
+            ? (totalFills / totalTimeNs) * 1_000_000_000
+            : totalFills;
+
+        console.log(`Batch: ${fillCount} fills in ${timeDiffMs.toFixed(2)}ms -> ${fillsPerSec.toFixed(0)} fills/sec | Avg: ${avgFillsPerSec.toFixed(0)} fills/sec`);
+
+        const fillMap = new Map();
+        const priceHistoryData = [];
+        const userUpdates = new Map();
+
+        for (const trade of trades) {
+            const {
+                askOrderId, askRemainingQuantity, askUserId,
+                bidOrderId, bidRemainingQuantity, bidUserId,
+                filledPrice, filledQuantity, ticker, timestamp
+            } = trade;
+
+            priceHistoryData.push({
+                ticker,
+                price: filledPrice / MICRO_UNIT,
+                filled: filledQuantity / MICRO_UNIT,
+                timestamp,
+                tradeId: bidOrderId
+            });
+
+            updateFillMap(bidOrderId, bidRemainingQuantity / MICRO_UNIT, filledQuantity / MICRO_UNIT, filledPrice / MICRO_UNIT, timestamp, {
+                userId: bidUserId,
+                ticker,
+                side: 'bid'
+            }, fillMap);
+
+            updateFillMap(askOrderId, askRemainingQuantity / MICRO_UNIT, filledQuantity / MICRO_UNIT, filledPrice / MICRO_UNIT, timestamp, {
+                userId: askUserId,
+                ticker,
+                side: 'ask'
+            }, fillMap);
+        }
+
+        const getOrCreateUser = (userId) => {
+            if (!userUpdates.has(userId)) {
+                userUpdates.set(userId, { cashDelta: 0, reservedCashDelta: 0, positions: new Map() });
+            }
+            return userUpdates.get(userId);
+        };
+
+        const getOrCreatePosition = (userEntry, ticker) => {
+            if (!userEntry.positions.has(ticker)) {
+                userEntry.positions.set(ticker, { sharesDelta: 0, costDelta: 0, reservedSharesDelta: 0 });
+            }
+            return userEntry.positions.get(ticker);
+        };
+
+        for (const [, data] of fillMap) {
+            if (data.bidUserId) {
+                const user = getOrCreateUser(data.bidUserId);
+                user.cashDelta -= data.totalCost;
+                user.reservedCashDelta -= data.totalCost;
+
+                const pos = getOrCreatePosition(user, data.ticker);
+                pos.sharesDelta += data.totalQuantity;
+                pos.costDelta += data.totalCost;
+            }
+
+            if (data.askUserId) {
+                const user = getOrCreateUser(data.askUserId);
+                user.cashDelta += data.totalCost;
+
+                const pos = getOrCreatePosition(user, data.ticker);
+                pos.sharesDelta -= data.totalQuantity;
+                pos.costDelta -= data.totalCost;
+                pos.reservedSharesDelta -= data.totalQuantity;
+            }
+        }
+
+        let connection;
+        let committed = false;
+        const sortedUserIds = sortStableIds([...userUpdates.keys()]);
+
+        try {
+            connection = await db.getConnection();
+            await connection.beginTransaction();
+
+            if (priceHistoryData.length > 0) {
+                const priceHistoryInserts = priceHistoryData.map(trade => [
+                    tickerToId.get(trade.ticker),
+                    trade.price,
+                    trade.filled,
+                    new Date(trade.timestamp / 1000000).toISOString().slice(0, 19).replace('T', ' '),
+                    trade.tradeId
+                ]);
+
+                await connection.query(
+                    `INSERT INTO price_history (stock_id, price, filled, timestamp, trade_id)
+                     VALUES ?`,
+                    [priceHistoryInserts]
+                );
+
+                const latestPrices = new Map();
+                for (const trade of priceHistoryData) {
+                    const existing = latestPrices.get(trade.ticker);
+                    if (!existing || trade.timestamp >= existing.timestamp) {
+                        latestPrices.set(trade.ticker, {
+                            price: trade.price,
+                            timestamp: trade.timestamp
+                        });
+                    }
+                }
+
+                const sortedTickers = [...latestPrices.keys()].sort();
+                if (sortedTickers.length > 0) {
+                    const priceCases = sortedTickers.map(() => `WHEN ticker = ? THEN ?`).join(' ');
+                    const priceValues = sortedTickers.flatMap(ticker => [ticker, latestPrices.get(ticker).price]);
+
+                    await connection.query(
+                        `UPDATE stocks SET price = CASE ${priceCases} ELSE price END
+                         WHERE ticker IN (?)`,
+                        [...priceValues, sortedTickers]
+                    );
+                }
+            }
+
+            const sortedOrderIds = sortStableIds([...fillMap.keys()]);
+            if (sortedOrderIds.length > 0) {
+                const quantityCases = sortedOrderIds.map(() => `WHEN id = ? THEN filled_quantity + ?`).join(' ');
+                const costCases = sortedOrderIds.map(() => `WHEN id = ? THEN filled_cost + ?`).join(' ');
+                const statusCases = sortedOrderIds.map(() => `WHEN id = ? THEN ?`).join(' ');
+                const timestampCases = sortedOrderIds.map(() => `WHEN id = ? THEN FROM_UNIXTIME(?)`).join(' ');
+
+                const quantityValues = sortedOrderIds.flatMap(id => [id, fillMap.get(id).totalQuantity]);
+                const costValues = sortedOrderIds.flatMap(id => [id, fillMap.get(id).totalCost]);
+                const statusValues = sortedOrderIds.flatMap(id => [id, fillMap.get(id).remainingQuantity === 0 ? 'FILLED' : 'PARTIALLY_FILLED']);
+                const timestampValues = sortedOrderIds.flatMap(id => [id, fillMap.get(id).lastTimestamp / 1_000_000_000]);
+
+                await connection.query(
+                    `UPDATE orders SET
+                        filled_quantity = CASE ${quantityCases} ELSE filled_quantity END,
+                        filled_cost     = CASE ${costCases} ELSE filled_cost END,
+                        status          = CASE ${statusCases} ELSE status END,
+                        updated_at      = CASE ${timestampCases} ELSE updated_at END
+                    WHERE id IN (?)
+                    ORDER BY id`,
+                    [...quantityValues, ...costValues, ...statusValues, ...timestampValues, sortedOrderIds]
+                );
+            }
+
+            if (sortedUserIds.length > 0) {
+                const userCashCases = sortedUserIds.map(() => `WHEN user_id = ? THEN cash + ?`).join(' ');
+                const userReservedCashCases = sortedUserIds.map(() => `WHEN user_id = ? THEN reserved_cash + ?`).join(' ');
+                const userCashValues = sortedUserIds.flatMap(userId => [userId, userUpdates.get(userId).cashDelta]);
+                const userReservedCashValues = sortedUserIds.flatMap(userId => [userId, userUpdates.get(userId).reservedCashDelta]);
+
+                await connection.query(
+                    `UPDATE users SET
+                        cash = CASE ${userCashCases} ELSE cash END,
+                        reserved_cash = CASE ${userReservedCashCases} ELSE reserved_cash END
+                    WHERE user_id IN (?)`,
+                    [...userCashValues, ...userReservedCashValues, sortedUserIds]
+                );
+            }
+
+            const positionRows = [];
+            for (const userId of sortedUserIds) {
+                const positions = userUpdates.get(userId).positions;
+                const sortedTickers = [...positions.keys()].sort();
+
+                for (const ticker of sortedTickers) {
+                    const { sharesDelta, costDelta, reservedSharesDelta } = positions.get(ticker);
+                    positionRows.push([userId, ticker, sharesDelta, costDelta, reservedSharesDelta]);
+                }
+            }
+
+            if (positionRows.length > 0) {
+                await connection.query(
+                    `INSERT INTO portfolio (user_id, ticker, shares, total_cost, reserved_shares)
+                        VALUES ?
+                        ON DUPLICATE KEY UPDATE
+                            shares = shares + VALUES(shares),
+                            total_cost = total_cost + VALUES(total_cost),
+                            reserved_shares = reserved_shares + VALUES(reserved_shares)`,
+                    [positionRows]
+                );
+
+                const positionPairPlaceholders = positionRows.map(() => '(?, ?)').join(', ');
+                const positionPairValues = positionRows.flatMap(([userId, ticker]) => [userId, ticker]);
+                await connection.query(
+                    `DELETE FROM portfolio
+                     WHERE (user_id, ticker) IN (${positionPairPlaceholders})
+                     AND shares <= 0`,
+                    positionPairValues
+                );
+            }
+
+            await connection.commit();
+            committed = true;
+        } catch (err) {
+            if (connection) {
+                try {
+                    await connection.rollback();
+                } catch (rollbackErr) {
+                    console.error('Rollback failed:', rollbackErr);
+                }
+            }
+            throw err;
+        } finally {
+            connection?.release();
+        }
+
+        if (!committed) return;
+
+        const volumeUpdates = {};
+        for (const trade of priceHistoryData) {
+            volumeUpdates[trade.ticker] = (volumeUpdates[trade.ticker] ?? 0) + trade.filled;
+        }
+
+        for (const [ticker, volumeDelta] of Object.entries(volumeUpdates)) {
+            io?.to(`ticker:${ticker}`).emit('VOLUME_UPDATE', {
+                ticker,
+                volumeDelta
+            });
+        }
+
+        for (const [userId, update] of userUpdates) {
+            const socket = userToSocket.get(userId);
+            if (!socket) continue;
+
+            const positions = Object.fromEntries(
+                [...update.positions].map(([ticker, position]) => [
+                    ticker,
+                    {
+                        ...position,
+                        currentPrice: Math.abs(position.sharesDelta) > 0
+                            ? Math.abs(position.costDelta / position.sharesDelta)
+                            : getPortfolioCurrentPrice(ticker)
+                    }
+                ])
+            );
+            socket.emit('PORTFOLIO_UPDATE', {
+                cashDelta: update.cashDelta,
+                reservedCashDelta: update.reservedCashDelta,
+                positions,
+            });
+        }
+
+        for (const [orderId, data] of fillMap) {
+            const userId = data.bidUserId || data.askUserId;
+            const socket = userToSocket.get(userId);
+            if (!socket) continue;
+
+            socket.emit('ORDER_FILLED', {
+                orderId,
+                ticker: data.ticker,
+                filledQuantity: data.totalQuantity,
+                filledPrice: data.filledPrice,
+                remainingQuantity: data.remainingQuantity,
+                status: data.remainingQuantity === 0 ? 'FILLED' : 'PARTIALLY_FILLED'
+            });
+        }
+
+        void broadcastLeaderboardUpdate();
+
+        function updateFillMap(orderId, remainingQuantity, filledQuantity, filledPrice, timestamp, meta, map) {
+            const entry = map.get(orderId) || {
+                bidUserId: null,
+                askUserId: null,
+                totalQuantity: 0,
+                totalCost: 0,
+                remainingQuantity: 0,
+                filledQuantity: 0,
+                filledPrice: 0,
+                lastTimestamp: 0,
+                side: meta.side,
+                ticker: meta.ticker
+            };
+
+            entry.totalQuantity += filledQuantity;
+            entry.totalCost += filledQuantity * filledPrice;
+            entry.filledPrice = filledPrice;
+            entry.remainingQuantity = remainingQuantity;
+            entry.filledQuantity = filledQuantity;
+
+            if (meta.side === 'bid') {
+                entry.bidUserId = meta.userId;
+            } else {
+                entry.askUserId = meta.userId;
+            }
+
+            if (timestamp > entry.lastTimestamp) {
+                entry.lastTimestamp = timestamp;
+            }
+
+            map.set(orderId, entry);
+        }
+    }
+
+    async function getCurrentStockPrice(ticker) {
+        try {
+            const [rows] = await db.query(`SELECT price FROM stocks WHERE ticker = ?;`, [ticker]);
+            return parseFloat(rows[0]?.price) || null;
+        }
+        catch (err) {
+            console.error('Error fetching stock price:', err);
+            throw new Error('Failed to fetch current price');
+        }
+    }
+
+    async function cancelOrderInDatabase(orderId) {
+        const connection = await db.getConnection();
+
+        try {
+            await connection.beginTransaction();
+
+            const [orders] = await connection.query(
+                `SELECT user_id, ticker, side, quantity, filled_quantity, estimated_amount, filled_cost, status
+                 FROM orders
+                 WHERE id = ?
+                 FOR UPDATE`,
+                [orderId]
+            );
+
+            const order = orders[0];
+            if (!order || !['OPEN', 'PARTIALLY_FILLED'].includes(order.status)) {
+                await connection.rollback();
+                return null;
+            }
+
+            if (order.side === 'BUY') {
+                const remainingReservedCash = Math.max(
+                    0,
+                    Number(order.estimated_amount ?? 0) - Number(order.filled_cost ?? 0)
+                );
+
+                await connection.query(
+                    `UPDATE users
+                     SET reserved_cash = GREATEST(0, reserved_cash - ?)
+                     WHERE user_id = ?`,
+                    [remainingReservedCash, order.user_id]
+                );
+            } else {
+                const remainingShares = Math.max(
+                    0,
+                    Number(order.quantity ?? 0) - Number(order.filled_quantity ?? 0)
+                );
+
+                await connection.query(
+                    `UPDATE portfolio
+                     SET reserved_shares = GREATEST(0, reserved_shares - ?)
+                     WHERE user_id = ?
+                     AND ticker = ?`,
+                    [remainingShares, order.user_id, order.ticker]
+                );
+            }
+
+            const [result] = await connection.query(
+                `UPDATE orders
+                 SET status = 'CANCELED'
+                 WHERE id = ?`,
+                [orderId]
+            );
+
+            await connection.commit();
+            return result;
+        } catch (err) {
+            await connection.rollback();
+            console.error('Error in cancelOrderInDatabase: ', err);
+            throw new Error('Failed to cancel order in database');
+        } finally {
+            connection.release();
+        }
+    }
+
+    function normalizeRejectedOrdersPayload(payload) {
+        if (Array.isArray(payload)) return payload;
+        if (Array.isArray(payload?.rejected)) return payload.rejected;
+        if (Array.isArray(payload?.rejectedOrders)) return payload.rejectedOrders;
+        if (Array.isArray(payload?.rejections)) return payload.rejections;
+        if (Array.isArray(payload?.orders)) return payload.orders;
+        return payload ? [payload] : [];
+    }
+
+    function toNormalUnits(microValue) {
+        const value = Number(microValue ?? 0);
+        return Number.isFinite(value) ? value / MICRO_UNIT : 0;
+    }
+
+    function isSameQuantity(left, right) {
+        return Math.abs(Number(left ?? 0) - Number(right ?? 0)) < 0.0001;
+    }
+
+    function timestampSecondsFromNanoseconds(timestamp) {
+        const value = Number(timestamp);
+        return Number.isFinite(value) && value > 0 ? value / 1_000_000_000 : null;
+    }
+
+    async function applyOrderRejectionToDatabase(rejected) {
+        if (!rejected?.orderId) return null;
+
+        const connection = await db.getConnection();
+
+        try {
+            await connection.beginTransaction();
+
+            const [orders] = await connection.query(
+                `SELECT quantity, status
+                 FROM orders
+                 WHERE id = ?
+                 FOR UPDATE`,
+                [rejected.orderId]
+            );
+
+            const order = orders[0];
+            if (!order || !['OPEN', 'PARTIALLY_FILLED'].includes(order.status)) {
+                await connection.rollback();
+                return null;
+            }
+
+            const rejectedQuantity = toNormalUnits(rejected.rejectedQuantity);
+            const orderQuantity = Number(order.quantity ?? 0);
+            const nextStatus = isSameQuantity(rejectedQuantity, orderQuantity) || rejectedQuantity > orderQuantity
+                ? 'REJECTED'
+                : 'PARTIALLY_FILLED';
+
+            const timestampSeconds = timestampSecondsFromNanoseconds(rejected.timestamp);
+            if (timestampSeconds) {
+                await connection.query(
+                    `UPDATE orders
+                     SET status = ?, updated_at = FROM_UNIXTIME(?)
+                     WHERE id = ?`,
+                    [nextStatus, timestampSeconds, rejected.orderId]
+                );
+            } else {
+                await connection.query(
+                    `UPDATE orders
+                     SET status = ?, updated_at = CURRENT_TIMESTAMP
+                     WHERE id = ?`,
+                    [nextStatus, rejected.orderId]
+                );
+            }
+
+            await connection.commit();
+            return nextStatus;
+        } catch (err) {
+            try {
+                await connection.rollback();
+            } catch (rollbackErr) {
+                console.error('Rollback failed while rejecting order:', rollbackErr);
+            }
+            throw err;
+        } finally {
+            connection.release();
+        }
+    }
+
+    async function verifyOrderOwnership(orderId) {
+        try {
+            const [rows] = await db.query('SELECT user_id, status FROM orders WHERE id = ?;', [orderId]);
+            return rows[0] || null;
+        } catch (err) {
+            console.error('Error in verifyOrderOwnership: ', err);
+            throw new Error('Failed to verify order ownership');
+        }
+    }
+
+    async function recoverUnfilledOrders() {
+        try {
+            await publisher.del('orders:recovery');
+            await publisher.del('orders:filled');
+            await publisher.del('orders:new');
+
+            const [rows] = await db.query(
+                `SELECT * FROM orders WHERE status = 'OPEN' ORDER BY created_at ASC`
+            );
+
+            if (rows.length === 0) {
+                console.log('No unfilled orders to recover');
+                return;
+            }
+
+            console.log(`Queueing ${rows.length} orders for recovery`);
+
+            for (const row of rows) {
+                const remainingQuantity = Math.round(row.quantity * MICRO_UNIT - row.filled_quantity * MICRO_UNIT);
+
+                const order = {
+                    id: row.id,
+                    userId: row.user_id,
+                    type: row.type,
+                    ticker: row.ticker,
+                    side: row.side,
+                    quantity: remainingQuantity,
+                    price: row.price ? Math.round(row.price * MICRO_UNIT) : null,
+                    estimatedCost: Math.round(row.estimated_amount * MICRO_UNIT),
+                    timestamp: new Date(row.created_at).getTime()
+                };
+                await redisClient.lpush('orders:recovery', JSON.stringify(order));
+            }
+
+            console.log('Recovery orders queued in Redis');
+        } catch (error) {
+            console.error('Recovery failed:', error);
+        }
+    }
+
+    async function initializeDepthCache() {
+        const [rows] = await db.query('SELECT ticker, price FROM stocks');
+
+        for (const row of rows) {
+            const defaultDepth = {
+                asks: [],
+                bids: [],
+                lastPrice: parseFloat(row.price)
+            };
+
+            depthCache.set(row.ticker, defaultDepth);
+        }
+    }
+
+    async function loadTickerMap() {
+        const [rows] = await db.query('SELECT id, ticker, price FROM stocks');
+        for (const row of rows) {
+            tickerToId.set(row.ticker, row.id);
+            stockMetaByTicker.set(row.ticker, {
+                id: row.id,
+                price: Number(row.price ?? 0)
+            });
+
+            const profile = getCompanyProfile(row.ticker);
+            estimatedValueByTicker.set(
+                row.ticker,
+                createEstimatedValueRange(row.price, profile?.archetype)
+            );
+        }
+        console.log(`Loaded ${tickerToId.size} ticker mappings`);
+    }
+
+    async function handleLimitOrder(order) {
+        const price = parseFloat(order.price);
+        return await executeOrder({
+            ...order,
+            price: price,
+            estimatedCost: price * order.quantity
+        });
+    }
+
+    async function handleMarketOrder(order) {
+        const currentPrice = await getCurrentStockPrice(order.ticker);
+        const buffer = 1.01;
+        const estimatedCost = currentPrice * order.quantity * buffer;
+
+        return await executeOrder({
+            ...order,
+            estimatedCost,
+            price: null
+        });
+    }
+
+    async function executeOrder(order) {
+        const connection = await db.getConnection();
+        const { userId, ticker, side, type, quantity, price, estimatedCost } = order;
+
+        try {
+            await connection.beginTransaction();
+            const [user] = await connection.query(
+                'SELECT cash, reserved_cash FROM users WHERE user_id = ? FOR UPDATE',
+                [userId]
+            );
+
+            if (side === 'BUY') {
+                const availableCash = user[0].cash - user[0].reserved_cash;
+
+                if (availableCash < estimatedCost) {
+                    await connection.rollback();
+                    return {
+                        success: false,
+                        error: 'Insufficient funds',
+                        statusCode: 400
+                    };
+                }
+
+                await connection.query(
+                    'UPDATE users SET reserved_cash = reserved_cash + ? WHERE user_id = ?',
+                    [estimatedCost, userId]
+                );
+            } else {
+                const [portfolio] = await connection.query(
+                    'SELECT shares, reserved_shares FROM portfolio WHERE user_id = ? AND ticker = ? FOR UPDATE',
+                    [userId, ticker]
+                );
+
+                if (!portfolio[0]) {
+                    await connection.rollback();
+                    return {
+                        success: false,
+                        error: 'No shares owned',
+                        statusCode: 400
+                    };
+                }
+
+                const availableShares = portfolio[0].shares - portfolio[0].reserved_shares;
+
+                if (availableShares < quantity) {
+                    await connection.rollback();
+                    return {
+                        success: false,
+                        error: 'Insufficient shares',
+                        available: availableShares,
+                        needed: quantity,
+                        statusCode: 400
+                    };
+                }
+
+                await connection.query(
+                    'UPDATE portfolio SET reserved_shares = reserved_shares + ? WHERE user_id = ? AND ticker = ?',
+                    [quantity, userId, ticker]
+                );
+            }
+
+            const [result] = await connection.query(
+                `INSERT INTO orders (user_id, ticker, side, type, price, quantity, status, estimated_amount)
+                 VALUES (?, ?, ?, ?, ?, ?, 'OPEN', ?)`,
+                [userId, ticker, side, type, price, quantity, estimatedCost]
+            );
+
+            await connection.commit();
+
+            const toMicro = (normal) => { return normal * MICRO_UNIT; };
+
+            const orderForEngine = {
+                id: result.insertId,
+                userId,
+                ticker,
+                side,
+                type,
+                price: toMicro(price),
+                quantity: toMicro(quantity),
+                estimatedCost: toMicro(estimatedCost),
+                timestamp: Date.now()
+            };
+
+            const orderForClient = {
+                orderId: result.insertId,
+                userId,
+                ticker,
+                side,
+                type,
+                price: price,
+                quantity: quantity,
+                filledQuantity: 0,
+                remainingQuantity: quantity,
+                status: "OPEN",
+                filledPrice: 0,
+                estimatedCost: estimatedCost,
+                timestamp: Date.now()
+            };
+
+            await publisher.publish('orders:new', JSON.stringify(orderForEngine));
+
+            const socket = userToSocket.get(userId);
+            socket?.emit("ORDER_PLACED", orderForClient);
+
+            return {
+                success: true,
+                orderId: result.insertId,
+                estimatedCost,
+                message: 'Order submitted successfully!',
+                statusCode: 200
+            };
+        } catch (error) {
+            await connection.rollback();
+            console.error('Order placement error:', error);
+            return {
+                success: false,
+                error: 'Failed to place order',
+                statusCode: 500
+            };
+        } finally {
+            connection.release();
+        }
+    }
+
+    async function placeOrder(order) {
+        const { type } = order;
+
+        if (type === 'LIMIT') {
+            if (!order.price) {
+                return {
+                    success: false,
+                    error: 'Limit orders require a price',
+                    statusCode: 400
+                };
+            }
+            return await handleLimitOrder(order);
+        }
+
+        if (type === 'MARKET') {
+            return await handleMarketOrder(order);
+        }
+
+        return {
+            success: false,
+            error: 'Invalid order type',
+            statusCode: 400
+        };
+    }
+
+    async function cancelOrder(order) {
+        if (!order?.orderId || !order?.ticker || !order?.side) {
+            return { success: false, error: 'Missing cancel order fields' };
+        }
+
+        await publisher.publish('orders:cancel', JSON.stringify(order));
+        return { success: true };
+    }
+
+    async function publishCancelOrder(order) {
+        await publisher.publish("orders:cancel", JSON.stringify(order));
+    }
+
+    return {
+        depthCache,
+        estimatedValueByTicker,
+        tickerToId,
+        setIo,
+        setPublisher,
+        setRedisClient,
+        setUserToSocket,
+        setBotManager,
+        getBotManager,
+        getLatestLeaderboard,
+        getEstimatedValueEntries,
+        getDepth,
+        getPortfolioCurrentPrice,
+        getCompanyProfile,
+        createEstimatedValueRange,
+        updateEstimatedValuesForNews,
+        applyStimulusCashForNews,
+        convertDepth,
+        buildLeaderboard,
+        broadcastLeaderboardUpdate,
+        startLeaderboardBroadcasts,
+        enqueueFillTrades,
+        cancelOrderInDatabase,
+        normalizeRejectedOrdersPayload,
+        applyOrderRejectionToDatabase,
+        toNormalUnits,
+        verifyOrderOwnership,
+        recoverUnfilledOrders,
+        initializeDepthCache,
+        loadTickerMap,
+        placeOrder,
+        cancelOrder,
+        publishCancelOrder
+    };
+}
