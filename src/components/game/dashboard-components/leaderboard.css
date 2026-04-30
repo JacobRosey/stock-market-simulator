@@ -4,7 +4,7 @@
     flex-direction: column;
     background: #020617;
     border-radius: 8px;
-    padding: 1.25rem;
+    padding: 1rem;
     color: #e5e7eb;
 }
 
@@ -68,6 +68,15 @@
     border-color: #4b5563;
 }
 
+.leaderboard-card.last-place {
+    border-color: #7f1d1d;
+    background: #1f1018;
+}
+
+.leaderboard-card.last-place:hover {
+    border-color: #ef4444;
+}
+
 .card-rank {
     width: 2.5rem;
     font-size: 1.1rem;
@@ -129,6 +138,14 @@
     flex: 1;
     height: 1px;
     background: #1e293b;
+}
+
+.last-place-separator {
+    color: #ef4444;
+}
+
+.last-place-separator .separator-line {
+    background: #7f1d1d;
 }
 
 .loading-spinner {

@@ -17,6 +17,12 @@ export default function Leaderboard({ currentUsername } : LeaderboardProps) {
     const currentUserRank = activeUsername && !topFive.some(entry => entry.username === activeUsername)
         ? leaderboard.find((entry: LeaderboardEntry) => entry.username === activeUsername) ?? null
         : null;
+    const lastPlace = leaderboard[leaderboard.length - 1] ?? null;
+    const visibleUsernames = new Set([
+        ...topFive.map(entry => entry.username),
+        ...(currentUserRank ? [currentUserRank.username] : []),
+    ]);
+    const showLastPlace = lastPlace && !visibleUsernames.has(lastPlace.username);
     const loading = leaderboard.length === 0;
 
     const formatGain = (gain: number): string => {
@@ -116,6 +122,35 @@ export default function Leaderboard({ currentUsername } : LeaderboardProps) {
                             <div className="not-placed-text">Not yet ranked</div>
                         </div>
                     </div>
+                )}
+
+                {showLastPlace && (
+                    <>
+                        <div className="leaderboard-separator last-place-separator">
+                            <span className="separator-line"></span>
+                            <span className="separator-text">last place</span>
+                            <span className="separator-line"></span>
+                        </div>
+
+                        <div className={`leaderboard-card last-place ${lastPlace.type}`}>
+                            <div className="card-rank">
+                                #{lastPlace.rank}
+                            </div>
+
+                            <div className="card-avatar">
+                                {getAvatar(lastPlace.type)}
+                            </div>
+
+                            <div className="card-info">
+                                <div className="card-username">
+                                    {getLeaderboardName(lastPlace)}
+                                </div>
+                                <div className={`card-gain ${lastPlace.gain >= 0 ? 'positive' : 'negative'}`}>
+                                    {formatGain(lastPlace.gain)}
+                                </div>
+                            </div>
+                        </div>
+                    </>
                 )}
             </div>
         </div>
