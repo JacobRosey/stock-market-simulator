@@ -10,6 +10,7 @@ import cookieParser from 'cookie-parser'
 import { createServer } from 'http'
 import { Server } from 'socket.io'
 import { startNewsGenerator } from './news/newsEngine.js';
+import { COMPANY_TYPES } from './news/headlineLibrary.js';
 import { createBotManager } from './bots/BotManager.js';
 
 dotenv.config();
@@ -213,22 +214,24 @@ app.get('/api/stocks', async (req, res) => {
     }
 });
 
-// need to change this when i go to 1 minute intervals
-// but that requires bots to trade often
-// and will only need to do that after matching engine built
 app.get('/api/stocks/:ticker/price-data', async (req, res) => {
     const { ticker } = req.params;
     const { range = '1d' } = req.query;
 
     try {
-        const stockId = tickerToId.get(ticker);
-        if (!stockId) {
+        const [stockRows] = await db.query(
+            'SELECT id, name, description, price FROM stocks WHERE ticker = ?',
+            [ticker]
+        );
+        const stock = stockRows[0];
+        if (!stock) {
             return res.status(404).json({ error: 'Stock not found' });
         }
+        const stockId = stock.id;
 
         // Determine time range and sample interval
         let timeFilter;
-        let sampleInterval; // in seconds
+        let sampleInterval;
 
         switch (range) {
             case '1m':
@@ -276,51 +279,57 @@ app.get('/api/stocks/:ticker/price-data', async (req, res) => {
                     MAX(price) as high,
                     (SELECT price FROM price_history 
                      WHERE stock_id = ? 
-                     ORDER BY timestamp ASC LIMIT 1) as open,
-                    (SELECT price FROM price_history 
-                     WHERE stock_id = ? 
                      ORDER BY timestamp DESC LIMIT 1) as current
                 FROM price_history
                 WHERE stock_id = ? 
                 AND timestamp > NOW() - ${timeFilter}
-            `, [stockId, stockId, stockId]);
+            `, [stockId, stockId]);
+
+            const [volumeRows] = await db.query(`
+                SELECT COALESCE(SUM(filled), 0) as volume24h
+                FROM price_history
+                WHERE stock_id = ?
+                AND timestamp > NOW() - INTERVAL 24 HOUR
+            `, [stockId]);
+
+            const current = Number(allRows[0]?.current ?? stock.price ?? 0);
+            const estimatedValue = estimatedValueByTicker.get(ticker)
+                ?? createEstimatedValueRange(current, getCompanyProfile(ticker)?.archetype);
 
             return res.json({
-                name: "",
-                description: "",
-                current: allRows[0]?.current || 0,
-                open: allRows[0]?.open || 0,
-                high: allRows[0]?.high || 0,
-                low: allRows[0]?.low || 0,
-                previousClose: 0,
+                name: stock.name,
+                description: stock.description,
+                current,
+                estimatedValue,
+                volume24h: Number(volumeRows[0]?.volume24h ?? 0),
+                high: Number(allRows[0]?.high ?? current),
+                low: Number(allRows[0]?.low ?? current),
                 chart: []
             });
         }
 
-        // Get previous close
-        const [prevCloseRows] = await db.query(`
-            SELECT price 
-            FROM price_history 
-            WHERE stock_id = ? 
-            AND timestamp < DATE_SUB(NOW(), ${timeFilter})
-            ORDER BY timestamp DESC 
-            LIMIT 1
+        const [volumeRows] = await db.query(`
+            SELECT COALESCE(SUM(filled), 0) as volume24h
+            FROM price_history
+            WHERE stock_id = ?
+            AND timestamp > NOW() - INTERVAL 24 HOUR
         `, [stockId]);
 
-        const previousClose = prevCloseRows[0]?.price || priceRows[0].price;
-
         // Calculate stats from sampled data
-        const prices = priceRows.map(p => p.price);
+        const prices = priceRows.map(p => Number(p.price));
+        const current = Number(priceRows[priceRows.length - 1]?.price ?? stock.price ?? 0);
+        const estimatedValue = estimatedValueByTicker.get(ticker)
+            ?? createEstimatedValueRange(current, getCompanyProfile(ticker)?.archetype);
         const stats = {
-            name: "",
-            description: "",
-            current: priceRows[priceRows.length - 1]?.price || 0,
-            open: priceRows[0]?.price || 0,
+            name: stock.name,
+            description: stock.description,
+            current,
+            estimatedValue,
+            volume24h: Number(volumeRows[0]?.volume24h ?? 0),
             high: Math.max(...prices),
             low: Math.min(...prices),
-            previousClose: previousClose,
             chart: priceRows.map(row => ({
-                price: row.price,
+                price: Number(row.price),
                 timestamp: row.timestamp
             }))
         };
@@ -385,8 +394,13 @@ app.get('/api/portfolio', async (req, res) => {
                 p.shares,
                 p.total_cost,
                 (p.total_cost / p.shares) as average_price,
-                COALESCE(s.price, 0) as current_price,
-                (p.shares * COALESCE(s.price, 0)) as current_value
+                COALESCE((
+                    SELECT ph.price
+                    FROM price_history ph
+                    WHERE ph.stock_id = s.id
+                    ORDER BY ph.timestamp DESC, ph.id DESC
+                    LIMIT 1
+                ), s.price, 0) as current_price
             FROM users u
             LEFT JOIN portfolio p ON u.user_id = p.user_id
             LEFT JOIN stocks s ON p.ticker = s.ticker
@@ -410,18 +424,25 @@ app.get('/api/portfolio', async (req, res) => {
         // Filter out null positions
         const positions = rows
             .filter(row => row.ticker !== null)
-            .map(row => ({
-                ticker: row.ticker,
-                shares: parseFloat(row.shares),
-                averagePrice: parseFloat(row.average_price) || 0,
-                totalCost: parseFloat(row.total_cost) || 0,
-                currentPrice: parseFloat(row.current_price),
-                currentValue: parseFloat(row.current_value),
-                gainLoss: parseFloat(row.current_value) - parseFloat(row.total_cost),
-                gainLossPercent: row.total_cost > 0
-                    ? ((parseFloat(row.current_value) - parseFloat(row.total_cost)) / parseFloat(row.total_cost)) * 100
-                    : 0
-            }));
+            .map(row => {
+                const shares = parseFloat(row.shares) || 0;
+                const totalCost = parseFloat(row.total_cost) || 0;
+                const currentPrice = getPortfolioCurrentPrice(row.ticker, row.current_price);
+                const currentValue = shares * currentPrice;
+
+                return {
+                    ticker: row.ticker,
+                    shares,
+                    averagePrice: parseFloat(row.average_price) || 0,
+                    totalCost,
+                    currentPrice,
+                    currentValue,
+                    gainLoss: currentValue - totalCost,
+                    gainLossPercent: totalCost > 0
+                        ? ((currentValue - totalCost) / totalCost) * 100
+                        : 0
+                };
+            });
 
         res.json({
             cash: parseFloat(cash),
@@ -533,6 +554,8 @@ io.on('connection', (socket) => {
             socket.emit('NEWS', latestGeneratedNews);
         }
 
+        socket.emit('ESTIMATED_VALUE_UPDATE', Object.fromEntries(estimatedValueByTicker));
+
         if (latestLeaderboard.length > 0) {
             socket.emit('LEADERBOARD_UPDATE', latestLeaderboard);
         } else {
@@ -637,6 +660,8 @@ const tickers = [
 ];
 
 const tickerToId = new Map();
+const stockMetaByTicker = new Map();
+const estimatedValueByTicker = new Map();
 
 for (const ticker of tickers) {
     await subscriber.subscribe(`orders:depth:${ticker}`);
@@ -644,6 +669,135 @@ for (const ticker of tickers) {
 }
 
 const depthCache = new Map(); // ticker -> latest depth snapshot
+
+const FAIR_VALUE_SPREAD_BY_ARCHETYPE = {
+    defensive: 0.03,
+    stable: 0.04,
+    moderate: 0.07,
+    cyclical: 0.09,
+    risky: 0.11
+};
+
+const FAIR_VALUE_SENTIMENT_MULTIPLIER_BY_ARCHETYPE = {
+    defensive: 0.25,
+    stable: 0.375,
+    moderate: 0.45,
+    cyclical: 0.5,
+    risky: 0.625
+};
+
+function roundMoney(value) {
+    return Number(Number(value).toFixed(2));
+}
+
+function getCompanyProfile(ticker) {
+    return COMPANY_TYPES.find(company => company.ticker === ticker);
+}
+
+function createEstimatedValueRange(price, archetype = 'moderate') {
+    const basePrice = Number(price ?? 0);
+    const spread = FAIR_VALUE_SPREAD_BY_ARCHETYPE[archetype] ?? FAIR_VALUE_SPREAD_BY_ARCHETYPE.moderate;
+    const halfRange = Math.max(0.5, basePrice * spread);
+
+    return {
+        low: roundMoney(Math.max(0.01, basePrice - halfRange)),
+        high: roundMoney(basePrice + halfRange)
+    };
+}
+
+function getAffectedTickersForNews(news) {
+    if (news.global) return [...tickers];
+
+    if (Array.isArray(news.affectedTickers) && news.affectedTickers.length > 0) {
+        return news.affectedTickers.filter(ticker => tickers.includes(ticker));
+    }
+
+    const affected = new Set();
+    const affectedSectors = new Set(news.affectedSectors ?? []);
+
+    if (affectedSectors.size > 0) {
+        for (const company of COMPANY_TYPES) {
+            if (affectedSectors.has(company.sector)) {
+                affected.add(company.ticker);
+            }
+        }
+    }
+
+    return [...affected].filter(ticker => tickers.includes(ticker));
+}
+
+function updateEstimatedValuesForNews(news) {
+    const updates = {};
+
+    for (const ticker of getAffectedTickersForNews(news)) {
+        const profile = getCompanyProfile(ticker);
+        const archetype = profile?.archetype ?? 'moderate';
+        const currentRange = estimatedValueByTicker.get(ticker)
+            ?? createEstimatedValueRange(stockMetaByTicker.get(ticker)?.price, archetype);
+        const multiplier = FAIR_VALUE_SENTIMENT_MULTIPLIER_BY_ARCHETYPE[archetype]
+            ?? FAIR_VALUE_SENTIMENT_MULTIPLIER_BY_ARCHETYPE.moderate;
+        const shift = Number(news.sentiment ?? 0) * multiplier;
+        const nextRange = {
+            low: roundMoney(Math.max(0.01, currentRange.low + shift)),
+            high: roundMoney(Math.max(0.01, currentRange.high + shift))
+        };
+
+        if (nextRange.high < nextRange.low) {
+            nextRange.high = nextRange.low;
+        }
+
+        estimatedValueByTicker.set(ticker, nextRange);
+        updates[ticker] = nextRange;
+    }
+
+    return updates;
+}
+
+function getStimulusCashAmount(news) {
+    if (news?.isStimulus !== true && news?.stimulus !== true) return 0;
+
+    const amount = Number(news.stimulusCashAmount ?? 0);
+    if (!Number.isFinite(amount) || amount <= 0) return 0;
+
+    return roundMoney(amount);
+}
+
+async function applyStimulusCashForNews(news) {
+    const cashAmount = getStimulusCashAmount(news);
+    if (cashAmount <= 0) return;
+
+    const [users] = await db.query(
+        `SELECT user_id
+         FROM users
+         WHERE username NOT LIKE 'bot_%'`
+    );
+
+    if (users.length === 0) return;
+
+    const userIds = users.map(user => user.user_id);
+
+    await db.query(
+        `UPDATE users
+         SET cash = COALESCE(cash, 0) + ?,
+             deposited_cash = COALESCE(deposited_cash, 0) + ?
+         WHERE user_id IN (?)`,
+        [cashAmount, cashAmount, userIds]
+    );
+
+    for (const userId of userIds) {
+        const socket = userToSocket.get(userId);
+        if (!socket) continue;
+
+        socket.emit('PORTFOLIO_UPDATE', {
+            cashDelta: cashAmount,
+            reservedCashDelta: 0,
+            depositedCashDelta: cashAmount,
+            positions: {},
+        });
+    }
+
+    void broadcastLeaderboardUpdate();
+}
 
 const convertDepth = (depth) => ({
     asks: (Array.isArray(depth?.asks) ? depth.asks : []).map(ask => ({
@@ -664,6 +818,14 @@ let leaderboardBuildInFlight = false;
 
 function getDepthPrice(ticker) {
     const price = Number(depthCache.get(ticker)?.lastPrice ?? 0);
+    return Number.isFinite(price) && price > 0 ? price : 0;
+}
+
+function getPortfolioCurrentPrice(ticker, fallbackPrice = 0) {
+    const depthPrice = getDepthPrice(ticker);
+    if (depthPrice > 0) return depthPrice;
+
+    const price = Number(fallbackPrice ?? 0);
     return Number.isFinite(price) && price > 0 ? price : 0;
 }
 
@@ -876,7 +1038,8 @@ async function processFillBatch(trades) {
         ? (totalFills / totalTimeNs) * 1_000_000_000
         : totalFills;
 
-    //console.log(`Batch: ${fillCount} fills in ${timeDiffMs.toFixed(2)}ms -> ${fillsPerSec.toFixed(0)} fills/sec | Avg: ${avgFillsPerSec.toFixed(0)} fills/sec`);
+    console.log(`Batch: ${fillCount} fills in ${timeDiffMs.toFixed(2)}ms -> ${fillsPerSec.toFixed(0)} fills/sec | Avg: ${avgFillsPerSec.toFixed(0)} fills/sec`);
+    //console.log(`Last fill: ${new Date(Date.now())}`)
 
     const fillMap = new Map();
     const priceHistoryData = [];
@@ -892,6 +1055,7 @@ async function processFillBatch(trades) {
         priceHistoryData.push({
             ticker,
             price: filledPrice / MICRO_UNIT,
+            filled: filledQuantity / MICRO_UNIT,
             timestamp,
             tradeId: bidOrderId
         });
@@ -957,15 +1121,39 @@ async function processFillBatch(trades) {
             const priceHistoryInserts = priceHistoryData.map(trade => [
                 tickerToId.get(trade.ticker),
                 trade.price,
+                trade.filled,
                 new Date(trade.timestamp / 1000000).toISOString().slice(0, 19).replace('T', ' '),
                 trade.tradeId
             ]);
 
             await connection.query(
-                `INSERT INTO price_history (stock_id, price, timestamp, trade_id) 
+                `INSERT INTO price_history (stock_id, price, filled, timestamp, trade_id) 
                  VALUES ?`,
                 [priceHistoryInserts]
             );
+
+            const latestPrices = new Map();
+            for (const trade of priceHistoryData) {
+                const existing = latestPrices.get(trade.ticker);
+                if (!existing || trade.timestamp >= existing.timestamp) {
+                    latestPrices.set(trade.ticker, {
+                        price: trade.price,
+                        timestamp: trade.timestamp
+                    });
+                }
+            }
+
+            const sortedTickers = [...latestPrices.keys()].sort();
+            if (sortedTickers.length > 0) {
+                const priceCases = sortedTickers.map(() => `WHEN ticker = ? THEN ?`).join(' ');
+                const priceValues = sortedTickers.flatMap(ticker => [ticker, latestPrices.get(ticker).price]);
+
+                await connection.query(
+                    `UPDATE stocks SET price = CASE ${priceCases} ELSE price END
+                     WHERE ticker IN (?)`,
+                    [...priceValues, sortedTickers]
+                );
+            }
         }
 
         const sortedOrderIds = sortStableIds([...fillMap.keys()]);
@@ -1056,11 +1244,33 @@ async function processFillBatch(trades) {
 
     if (!committed) return;
 
+    const volumeUpdates = {};
+    for (const trade of priceHistoryData) {
+        volumeUpdates[trade.ticker] = (volumeUpdates[trade.ticker] ?? 0) + trade.filled;
+    }
+
+    for (const [ticker, volumeDelta] of Object.entries(volumeUpdates)) {
+        io.to(`ticker:${ticker}`).emit('VOLUME_UPDATE', {
+            ticker,
+            volumeDelta
+        });
+    }
+
     for (const [userId, update] of userUpdates) {
         const socket = userToSocket.get(userId);
         if (!socket) continue;
 
-        const positions = Object.fromEntries(update.positions);
+        const positions = Object.fromEntries(
+            [...update.positions].map(([ticker, position]) => [
+                ticker,
+                {
+                    ...position,
+                    currentPrice: Math.abs(position.sharesDelta) > 0
+                        ? Math.abs(position.costDelta / position.sharesDelta)
+                        : getPortfolioCurrentPrice(ticker)
+                }
+            ])
+        );
         socket.emit('PORTFOLIO_UPDATE', {
             cashDelta: update.cashDelta,
             reservedCashDelta: update.reservedCashDelta,
@@ -1159,17 +1369,9 @@ subscriber.on('message', async (channel, message) => {
         try {
 
             const data = JSON.parse(message);
-            console.log(`Order removed from matching engine: `, data);
 
-            const result = await updateOrderStatus("CANCELED", data.orderId);
+            const result = await cancelOrderInDatabase(data.orderId);
 
-            console.log(result)
-
-            if (!result) {
-                console.log("But could not be updated in the database! ")
-            } else {
-                console.log("Order successfully canceled!")
-            }
             botManager?.onOrderCanceled(data.orderId);
             // Send cancel confirmation to user via websocket
             // Need access to user id for that
@@ -1192,22 +1394,30 @@ subscriber.on('message', async (channel, message) => {
     // Should only be used for market orders that could not be filled
     // Or limit orders that somehow reached engine while missing required data
     if (channel == 'orders:rejected') {
-        const rejected = JSON.parse(message);
-        console.log(rejected);
-        botManager?.onOrderRejected(rejected);
-        const socket = userToSocket.get(rejected.userId);
-        socket?.emit('ORDER_REJECTED', {
-            orderId: rejected.orderId,
-            userId: rejected.userId,
-            ticker: rejected.ticker,
-            side: rejected.side,
-            rejectedQuantity: rejected.rejectedQuantity,
-            reason: rejected.reason,
-            timestamp: rejected.timestamp,
-            status: 'REJECTED'
-        });
+        try {
+            const parsed = JSON.parse(message);
+            const rejectedOrders = normalizeRejectedOrdersPayload(parsed);
+            console.log("Rejected orders: ", rejectedOrders.length)
+            for (const rejected of rejectedOrders) {
+                const orderStatus = await applyOrderRejectionToDatabase(rejected);
+                botManager?.onOrderRejected(rejected);
 
-
+                const socket = userToSocket.get(rejected.userId);
+                socket?.emit('ORDER_REJECTED', {
+                    orderId: rejected.orderId,
+                    userId: rejected.userId,
+                    ticker: rejected.ticker,
+                    side: rejected.side,
+                    rejectedQuantity: toNormalUnits(rejected.rejectedQuantity),
+                    reason: rejected.reason,
+                    timestamp: rejected.timestamp,
+                    status: 'REJECTED',
+                    orderStatus: orderStatus ?? 'REJECTED'
+                });
+            }
+        } catch (err) {
+            console.error('Failed to process orders:rejected payload:', err);
+        }
     }
 });
 
@@ -1227,13 +1437,150 @@ async function getCurrentStockPrice(ticker) {
     }
 }
 
-async function updateOrderStatus(newStatus, orderId) {
+async function cancelOrderInDatabase(orderId) {
+    const connection = await db.getConnection();
+
     try {
-        const [rows] = await db.query('UPDATE orders SET status = ? WHERE id = ?;', [newStatus, orderId])
-        return rows[0] || null;
+        await connection.beginTransaction();
+
+        const [orders] = await connection.query(
+            `SELECT user_id, ticker, side, quantity, filled_quantity, estimated_amount, filled_cost, status
+             FROM orders
+             WHERE id = ?
+             FOR UPDATE`,
+            [orderId]
+        );
+
+        const order = orders[0];
+        if (!order || !['OPEN', 'PARTIALLY_FILLED'].includes(order.status)) {
+            await connection.rollback();
+            return null;
+        }
+
+        if (order.side === 'BUY') {
+            const remainingReservedCash = Math.max(
+                0,
+                Number(order.estimated_amount ?? 0) - Number(order.filled_cost ?? 0)
+            );
+
+            await connection.query(
+                `UPDATE users
+                 SET reserved_cash = GREATEST(0, reserved_cash - ?)
+                 WHERE user_id = ?`,
+                [remainingReservedCash, order.user_id]
+            );
+        } else {
+            const remainingShares = Math.max(
+                0,
+                Number(order.quantity ?? 0) - Number(order.filled_quantity ?? 0)
+            );
+
+            await connection.query(
+                `UPDATE portfolio
+                 SET reserved_shares = GREATEST(0, reserved_shares - ?)
+                 WHERE user_id = ?
+                 AND ticker = ?`,
+                [remainingShares, order.user_id, order.ticker]
+            );
+        }
+
+        const [result] = await connection.query(
+            `UPDATE orders
+             SET status = 'CANCELED'
+             WHERE id = ?`,
+            [orderId]
+        );
+
+        await connection.commit();
+        return result;
     } catch (err) {
-        console.error('Error in updateOrderStatus: ', err);
-        throw new Error('Failed to update order status')
+        await connection.rollback();
+        console.error('Error in cancelOrderInDatabase: ', err);
+        throw new Error('Failed to cancel order in database')
+    } finally {
+        connection.release();
+    }
+}
+
+function normalizeRejectedOrdersPayload(payload) {
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload?.rejected)) return payload.rejected;
+    if (Array.isArray(payload?.rejectedOrders)) return payload.rejectedOrders;
+    if (Array.isArray(payload?.rejections)) return payload.rejections;
+    if (Array.isArray(payload?.orders)) return payload.orders;
+    return payload ? [payload] : [];
+}
+
+function toNormalUnits(microValue) {
+    const value = Number(microValue ?? 0);
+    return Number.isFinite(value) ? value / MICRO_UNIT : 0;
+}
+
+function isSameQuantity(left, right) {
+    return Math.abs(Number(left ?? 0) - Number(right ?? 0)) < 0.0001;
+}
+
+function timestampSecondsFromNanoseconds(timestamp) {
+    const value = Number(timestamp);
+    return Number.isFinite(value) && value > 0 ? value / 1_000_000_000 : null;
+}
+
+async function applyOrderRejectionToDatabase(rejected) {
+    if (!rejected?.orderId) return null;
+
+    const connection = await db.getConnection();
+
+    try {
+        await connection.beginTransaction();
+
+        const [orders] = await connection.query(
+            `SELECT quantity, status
+             FROM orders
+             WHERE id = ?
+             FOR UPDATE`,
+            [rejected.orderId]
+        );
+
+        const order = orders[0];
+        if (!order || !['OPEN', 'PARTIALLY_FILLED'].includes(order.status)) {
+            await connection.rollback();
+            return null;
+        }
+
+        const rejectedQuantity = toNormalUnits(rejected.rejectedQuantity);
+        const orderQuantity = Number(order.quantity ?? 0);
+        const nextStatus = isSameQuantity(rejectedQuantity, orderQuantity) || rejectedQuantity > orderQuantity
+            ? 'REJECTED'
+            : 'PARTIALLY_FILLED';
+
+        const timestampSeconds = timestampSecondsFromNanoseconds(rejected.timestamp);
+        if (timestampSeconds) {
+            await connection.query(
+                `UPDATE orders
+                 SET status = ?, updated_at = FROM_UNIXTIME(?)
+                 WHERE id = ?`,
+                [nextStatus, timestampSeconds, rejected.orderId]
+            );
+        } else {
+            await connection.query(
+                `UPDATE orders
+                 SET status = ?, updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?`,
+                [nextStatus, rejected.orderId]
+            );
+        }
+
+        await connection.commit();
+        return nextStatus;
+    } catch (err) {
+        try {
+            await connection.rollback();
+        } catch (rollbackErr) {
+            console.error('Rollback failed while rejecting order:', rollbackErr);
+        }
+        throw err;
+    } finally {
+        connection.release();
     }
 }
 
@@ -1309,16 +1656,22 @@ async function initializeDepthCache() {
 }
 
 async function loadTickerMap() {
-    const [rows] = await db.query('SELECT id, ticker FROM stocks');
+    const [rows] = await db.query('SELECT id, ticker, price FROM stocks');
     for (const row of rows) {
         tickerToId.set(row.ticker, row.id);
+        stockMetaByTicker.set(row.ticker, {
+            id: row.id,
+            price: Number(row.price ?? 0)
+        });
+
+        const profile = getCompanyProfile(row.ticker);
+        estimatedValueByTicker.set(
+            row.ticker,
+            createEstimatedValueRange(row.price, profile?.archetype)
+        );
     }
     console.log(`Loaded ${tickerToId.size} ticker mappings`);
 }
-
-// I should move everything that needs to happen on server startup to a separate file
-// like app.listen, redis setup, websocket setup, etc
-
 
 async function handleLimitOrder(order) {
     const price = parseFloat(order.price);
@@ -1496,12 +1849,22 @@ async function placeOrder(order) {
     };
 }
 
+async function cancelOrder(order) {
+    if (!order?.orderId || !order?.ticker || !order?.side) {
+        return { success: false, error: 'Missing cancel order fields' };
+    }
+
+    await publisher.publish('orders:cancel', JSON.stringify(order));
+    return { success: true };
+}
+
 await loadTickerMap();
 await initializeDepthCache();
 await recoverUnfilledOrders();
 botManager = createBotManager({
     db,
     placeOrder,
+    cancelOrder,
     getDepth: (ticker) => depthCache.get(ticker),
     logger: console
 });
@@ -1512,6 +1875,13 @@ startNewsGenerator(io, {
     emitOnStart: true,
     onEmit: (payload) => {
         latestGeneratedNews = payload;
+        const estimatedValueUpdates = updateEstimatedValuesForNews(payload);
+        if (Object.keys(estimatedValueUpdates).length > 0) {
+            io.emit('ESTIMATED_VALUE_UPDATE', estimatedValueUpdates);
+        }
+        void applyStimulusCashForNews(payload).catch(error => {
+            console.error('Failed to apply stimulus cash:', error);
+        });
         void botManager?.onNews(payload);
     }
 });
