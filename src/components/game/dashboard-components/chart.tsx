@@ -12,6 +12,10 @@ interface PricePoint {
   timestamp: string;
   price: number;
 }
+interface EstimatedValueRange {
+  low: number;
+  high: number;
+}
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -19,6 +23,20 @@ function clamp(value: number, min: number, max: number) {
 
 function formatShares(shares: number) {
   return Number.isInteger(shares) ? shares.toString() : shares.toFixed(4).replace(/\.?0+$/, '');
+}
+
+function formatMoney(value: number) {
+  return Number(value || 0).toFixed(2);
+}
+
+function formatMoneyRounded(value: number){
+  return Math.round(Number(formatMoney(value)))
+}
+
+function formatVolume(value: number) {
+  return Number(value || 0).toLocaleString(undefined, {
+    maximumFractionDigits: 4
+  });
 }
 
 function PositionLineLabel({ viewBox, label }: { viewBox?: any; label: string }) {
@@ -50,11 +68,12 @@ function PositionLineLabel({ viewBox, label }: { viewBox?: any; label: string })
 }
 
 export default function Chart({ ticker }: ChartProps) {
-  const { prices, portfolio } = useWebSocket();
+  const { prices, portfolio, volume24hByTicker, estimatedValues } = useWebSocket();
   const [history, setHistory] = useState<PricePoint[]>([]);
   const [showInfo, setShowInfo] = useState(false);
   const [range, setRange] = useState('1m');
   const ranges = ['1m', '5m', '1h', '1d', '1w'];
+  const volumeDeltaBaselineRef = useRef(0);
 
   // Set data point refresh rate (time between new point rendering)
   const getIntervalMs = (range: string) => {
@@ -84,10 +103,10 @@ export default function Chart({ ticker }: ChartProps) {
     name: ticker,
     description: "",
     current: 0,
-    open: 0,
+    estimatedValue: null as EstimatedValueRange | null,
+    volume24h: 0,
     high: 0,
     low: 0,
-    previousClose: 0
   });
 
   const [loading, setLoading] = useState(true);
@@ -97,14 +116,15 @@ export default function Chart({ ticker }: ChartProps) {
 
     fetchPriceHistory(ticker, range).then(data => {
       setHistory(data.chart);
+      volumeDeltaBaselineRef.current = volume24hByTicker[ticker] ?? 0;
       setStats({
         name: data.name,
         description: data.description,
         current: data.current,
-        open: data.open,
+        estimatedValue: data.estimatedValue ?? null,
+        volume24h: data.volume24h ?? 0,
         high: data.high,
         low: data.low,
-        previousClose: data.previousClose
       });
       setLoading(false);
     });
@@ -118,8 +138,23 @@ export default function Chart({ ticker }: ChartProps) {
     const newPrice = prices?.[ticker];
     if (!newPrice) return;
     latestPriceRef.current = newPrice;
-    setStats(prev => ({ ...prev, current: newPrice }));
+    setStats(prev => ({
+      ...prev,
+      current: newPrice,
+      high: Math.max(prev.high || newPrice, newPrice),
+      low: prev.low > 0 ? Math.min(prev.low, newPrice) : newPrice
+    }));
   }, [prices, ticker]);
+
+  useEffect(() => {
+    const nextDelta = volume24hByTicker[ticker] ?? 0;
+    const deltaSinceFetch = nextDelta - volumeDeltaBaselineRef.current;
+    setStats(prev => ({
+      ...prev,
+      volume24h: Math.max(0, prev.volume24h + deltaSinceFetch)
+    }));
+    volumeDeltaBaselineRef.current = nextDelta;
+  }, [ticker, volume24hByTicker]);
 
   // Interval-driven chart updates — runs on a fixed tick regardless of websocket communication
   // Needs work - still incorrect x-axis 
@@ -216,8 +251,12 @@ export default function Chart({ ticker }: ChartProps) {
 
 
   const formattedPrice = Number(currentPrice).toFixed(2);
-  const change = currentPrice - stats.previousClose;
-  const changePercent = (change / stats.previousClose) * 100;
+  const estimatedValue = estimatedValues[ticker] ?? stats.estimatedValue;
+  const estimatedMidpoint = estimatedValue
+    ? (estimatedValue.low + estimatedValue.high) / 2
+    : 0;
+  const change = estimatedMidpoint > 0 ? currentPrice - estimatedMidpoint : 0;
+  const changePercent = estimatedMidpoint > 0 ? (change / estimatedMidpoint) * 100 : 0;
   const isPositive = change >= 0;
 
   if (loading) return <div className="chart-loading">Loading chart...</div>;
@@ -246,34 +285,31 @@ export default function Chart({ ticker }: ChartProps) {
           </div>
         </div>
 
-        {/* 
-            Not gonna need open or previous close, figure out some better stats to put there
-            volume? P/E? High/low needs to be changed to use the min/max within current price history timeframe
-          */
-        }
         <div className="daily-stats">
           <div className="stat">
-            <span className="stat-label">Open</span>
-            <span className="stat-value">${stats.open}</span>
+            <span className="stat-label">Est. Value</span>
+            <span className="stat-value">
+              {estimatedValue ? `$${formatMoneyRounded(estimatedValue.low)}-$${formatMoneyRounded(estimatedValue.high)}` : '-'}
+            </span>
+          </div>
+          <div className="stat">
+            <span className="stat-label">24h Volume</span>
+            <span className="stat-value">{formatVolume(stats.volume24h)}</span>
           </div>
           <div className="stat">
             <span className="stat-label">High</span>
-            <span className="stat-value">${stats.high}</span>
+            <span className="stat-value">${formatMoney(stats.high)}</span>
           </div>
           <div className="stat">
             <span className="stat-label">Low</span>
-            <span className="stat-value">${stats.low}</span>
-          </div>
-          <div className="stat">
-            <span className="stat-label">Prev Close</span>
-            <span className="stat-value">${stats.previousClose}</span>
+            <span className="stat-value">${formatMoney(stats.low)}</span>
           </div>
         </div>
 
         <div className="price-info">
           <div className="current-price">${formattedPrice}</div>
           <div className={`price-change ${isPositive ? 'positive' : 'negative'}`}>
-            {isPositive ? '+' : ''}{change.toFixed(2)} ({isPositive ? '+' : ''}{changePercent.toFixed(2)}%)
+            {isPositive ? '+' : ''}{change.toFixed(2)} vs est. ({isPositive ? '+' : ''}{changePercent.toFixed(2)}%)
           </div>
         </div>
       </div>
