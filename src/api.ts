@@ -1,8 +1,8 @@
-import type { OrderRequestData } from "./types";
+import type { OrderRequestData, StocksResponse } from "./types";
 
 const API_BASE = 'http://localhost:3000/api';
 
-export const fetchStocks = async () => {
+export const fetchStocks = async (): Promise<StocksResponse> => {
     try {
         const response = await fetch(`${API_BASE}/stocks`);
 
@@ -27,7 +27,7 @@ export const fetchPriceHistory = async (ticker: string, range = '1d') => {
         if (!response.ok) {
             console.error(`Response not OK in fetchPriceHistory: `, response)
         }
-        return response.json();
+        return response.json()
     }
     catch (error) {
         console.error(`Error in fetchPriceHistory: `, error)
