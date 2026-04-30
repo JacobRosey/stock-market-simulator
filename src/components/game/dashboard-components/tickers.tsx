@@ -1,15 +1,7 @@
 import { useState, useEffect } from 'react';
-import { type Ticker } from '../../../types'
+import { type Stock, type Ticker } from '../../../types'
 import { fetchStocks } from '../../../api'
 import './tickers.css'
-
-interface Stock {
-    ticker: Ticker;
-    name: string;
-    sector: string;
-    description: string;
-    price: number;
-}
 
 interface GroupedStocks {
     [sector: string]: Stock[];
