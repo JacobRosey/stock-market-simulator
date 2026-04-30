@@ -1,4 +1,4 @@
-import { buildLimitPrice, randomizeQuantity, scoreTickerForSentiment, tickerMeta } from './shared.js';
+import { buildLimitPrice, chooseOrderType, randomizeQuantity, scoreTickerForSentiment, tickerMeta } from './shared.js';
 
 const thresholds = {
     TECH: { buy: 4, sell: -4 },
@@ -26,11 +26,16 @@ function onTick({ tickers, getDepth, sentimentByTicker }) {
     if (!signal) return [];
 
     const quantity = randomizeQuantity(6 + signal.strength * 8, 1);
+    const type = chooseOrderType(0.7);
+    if (type === 'MARKET') {
+        return [{ ticker: signal.ticker, side: signal.side, type, quantity, consumeSentiment: true }];
+    }
+
     const offset = signal.side === 'BUY' ? 0.15 : 0.12;
     const price = buildLimitPrice(getDepth, signal.ticker, signal.side, offset);
 
     if (!price) return [];
-    return [{ ticker: signal.ticker, side: signal.side, type: 'LIMIT', price, quantity, consumeSentiment: true }];
+    return [{ ticker: signal.ticker, side: signal.side, type, price, quantity, consumeSentiment: true }];
 }
 
 export default {

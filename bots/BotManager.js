@@ -1,5 +1,6 @@
 import { BOT_NAME_TO_STRATEGY } from './strategies/index.js';
 import { COMPANY_TYPES } from '../news/headlineLibrary.js';
+import { getReferencePrice, roundPrice } from './strategies/shared.js';
 
 const MICRO_UNIT = 1e6;
 const MIN_SENTIMENT = -10;
@@ -7,6 +8,17 @@ const MAX_SENTIMENT = 10;
 const SENTIMENT_DECAY_INTERVAL_MS = 20_000;
 const MIN_SENTIMENT_ACTION_COOLDOWN_MS = 45_000;
 const MAX_SENTIMENT_ACTION_COOLDOWN_MS = 60_000;
+const LIMIT_ORDER_MAX_AGE_MS = 120_000;
+const LIMIT_ORDER_MAX_DISTANCE_FROM_REFERENCE = 0.12;
+const EXIT_TRIGGER_STEP = 0.05;
+const EXIT_CHECK_COOLDOWN_MS = 15_000;
+const EXIT_BASE_PROBABILITY = 0.25;
+const EXIT_PROBABILITY_PER_STEP = 0.2;
+const EXIT_MAX_PROBABILITY = 0.85;
+const EXIT_MAX_POSITION_SHARE = 0.2;
+const EXIT_MAX_OPEN_SELL_SHARE = 0.3;
+const TAKE_PROFIT_LIMIT_OFFSET = 0.03;
+const STOP_LOSS_LIMIT_OFFSET = 0.03;
 
 function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
@@ -54,6 +66,7 @@ class BotRuntime {
         this.username = user.username;
         this.strategy = strategy;
         this.placeOrder = dependencies.placeOrder;
+        this.cancelOrder = dependencies.cancelOrder;
         this.getDepth = dependencies.getDepth;
         this.tickers = dependencies.tickers;
         this.logger = dependencies.logger;
@@ -67,6 +80,7 @@ class BotRuntime {
         this.openOrders = new Map();
         this.consumedSignalVersionByTicker = new Map();
         this.sentimentCooldownUntilByTicker = new Map();
+        this.exitCooldownUntilByTicker = new Map();
 
         this._busy = false;
         this._tickTimer = null;
@@ -106,6 +120,8 @@ class BotRuntime {
             type: row.type,
             remainingQuantity,
             reservedRemaining: Number(row.estimated_amount ?? 0) - Number(row.filled_cost ?? 0),
+            price: Number(row.price ?? 0),
+            createdAt: new Date(row.created_at ?? Date.now()).getTime(),
             status: row.status,
         });
     }
@@ -153,6 +169,8 @@ class BotRuntime {
         this._busy = true;
 
         try {
+            await this._cancelStaleLimitOrders();
+
             const context = {
                 bot: this,
                 news,
@@ -167,7 +185,10 @@ class BotRuntime {
                     : 0,
             };
 
-            const intents = intentBuilder(context) ?? [];
+            const intents = [
+                ...this._buildExitIntents(),
+                ...(intentBuilder(context) ?? []),
+            ];
             for (const intent of intents) {
                 await this._placeIntent(intent);
                 if (intent?.consumeSentimentScope === 'all') {
@@ -262,6 +283,8 @@ class BotRuntime {
             type: orderInput.type,
             remainingQuantity: orderInput.quantity,
             reservedRemaining: Number(result.estimatedCost ?? 0),
+            price: orderInput.price,
+            createdAt: Date.now(),
             status: 'OPEN',
         };
 
@@ -275,6 +298,71 @@ class BotRuntime {
         if (order.side === 'BUY') {
             this.reservedCash += order.reservedRemaining;
         }
+    }
+
+    _buildExitIntents() {
+        const intents = [];
+        const now = Date.now();
+
+        for (const [ticker, position] of this.positions.entries()) {
+            const shares = Number(position.shares ?? 0);
+            const totalCost = Number(position.totalCost ?? 0);
+            const averageCost = shares > 0 ? totalCost / shares : 0;
+            if (shares <= 0 || averageCost <= 0) continue;
+
+            const availableShares = this.getAvailableShares(ticker);
+            if (availableShares < 1) continue;
+
+            const cooldownUntil = this.exitCooldownUntilByTicker.get(ticker) ?? 0;
+            if (now < cooldownUntil) continue;
+
+            const referencePrice = getReferencePrice(this.getDepth, ticker);
+            if (!Number.isFinite(referencePrice) || referencePrice <= 0) continue;
+
+            const gainPercent = (referencePrice - averageCost) / averageCost;
+            const isTakeProfit = gainPercent >= EXIT_TRIGGER_STEP;
+            const isStopLoss = gainPercent <= -EXIT_TRIGGER_STEP;
+            if (!isTakeProfit && !isStopLoss) continue;
+
+            const openSellQuantity = this.getOpenOrderCount(ticker, 'SELL');
+            const maxOpenSellQuantity = Math.max(1, Math.floor(shares * EXIT_MAX_OPEN_SELL_SHARE));
+            if (openSellQuantity >= maxOpenSellQuantity) continue;
+
+            const triggerSteps = Math.floor(Math.abs(gainPercent) / EXIT_TRIGGER_STEP);
+            const probability = Math.min(
+                EXIT_MAX_PROBABILITY,
+                EXIT_BASE_PROBABILITY + Math.max(0, triggerSteps - 1) * EXIT_PROBABILITY_PER_STEP
+            );
+
+            if (Math.random() > probability) {
+                this.exitCooldownUntilByTicker.set(ticker, now + EXIT_CHECK_COOLDOWN_MS);
+                continue;
+            }
+
+            const maxPositionQuantity = Math.max(1, Math.floor(shares * EXIT_MAX_POSITION_SHARE));
+            const desiredQuantity = Math.min(
+                availableShares,
+                maxPositionQuantity,
+                maxOpenSellQuantity - openSellQuantity
+            );
+            const quantity = Math.floor(desiredQuantity);
+            if (quantity < 1) continue;
+
+            const priceOffset = isTakeProfit ? TAKE_PROFIT_LIMIT_OFFSET : -STOP_LOSS_LIMIT_OFFSET;
+            const price = roundPrice(referencePrice + priceOffset);
+            if (!price) continue;
+
+            this.exitCooldownUntilByTicker.set(ticker, now + EXIT_CHECK_COOLDOWN_MS);
+            intents.push({
+                ticker,
+                side: 'SELL',
+                type: 'LIMIT',
+                price,
+                quantity,
+            });
+        }
+
+        return intents;
     }
 
     applyFill({ orderId, side, ticker, filledQuantity, filledPrice, remainingQuantity }) {
@@ -332,6 +420,44 @@ class BotRuntime {
         this.openOrders.delete(orderId);
     }
 
+    async _cancelStaleLimitOrders() {
+        if (!this.cancelOrder || this.openOrders.size === 0) return;
+
+        const now = Date.now();
+
+        for (const order of this.openOrders.values()) {
+            if (order.type !== 'LIMIT' || order.remainingQuantity <= 0 || order.cancelRequested) continue;
+
+            const ageMs = now - Number(order.createdAt ?? now);
+            const referencePrice = getReferencePrice(this.getDepth, order.ticker);
+            const orderPrice = Number(order.price ?? 0);
+            const distanceFromReference = Number.isFinite(referencePrice) && referencePrice > 0 && orderPrice > 0
+                ? Math.abs(orderPrice - referencePrice) / referencePrice
+                : 0;
+
+            if (
+                ageMs < LIMIT_ORDER_MAX_AGE_MS
+                && distanceFromReference <= LIMIT_ORDER_MAX_DISTANCE_FROM_REFERENCE
+            ) {
+                continue;
+            }
+
+            order.cancelRequested = true;
+            try {
+                await this.cancelOrder({
+                    orderId: order.orderId,
+                    userId: this.userId,
+                    ticker: order.ticker,
+                    side: order.side,
+                    type: order.type,
+                });
+            } catch (error) {
+                order.cancelRequested = false;
+                this.logger.warn(`[${this.strategy.displayName}] failed to request stale order cancel`, error);
+            }
+        }
+    }
+
     getPortfolioSnapshot() {
         return {
             userId: this.userId,
@@ -352,9 +478,10 @@ class BotRuntime {
 }
 
 export class BotManager {
-    constructor({ db, placeOrder, getDepth, logger = console }) {
+    constructor({ db, placeOrder, cancelOrder, getDepth, logger = console }) {
         this.db = db;
         this.placeOrder = placeOrder;
+        this.cancelOrder = cancelOrder;
         this.getDepth = getDepth;
         this.logger = logger;
         this.runtimes = [];
@@ -533,7 +660,7 @@ export class BotManager {
         );
 
         const [openOrders] = await this.db.query(
-            `SELECT id, user_id, ticker, side, type, quantity, filled_quantity, status, estimated_amount, filled_cost
+            `SELECT id, user_id, ticker, side, type, price, quantity, filled_quantity, status, estimated_amount, filled_cost, created_at
          FROM orders
          WHERE user_id IN (?) AND status IN ('OPEN', 'PARTIALLY_FILLED')`,
             [userIds]
@@ -544,6 +671,7 @@ export class BotManager {
         for (const user of botUsersWithStrategy) {
             const runtime = new BotRuntime(user, user.strategy, {
                 placeOrder: this.placeOrder,
+                cancelOrder: this.cancelOrder,
                 getDepth: this.getDepth,
                 tickers: COMPANY_TYPES.map(c => c.ticker),
                 logger: this.logger,

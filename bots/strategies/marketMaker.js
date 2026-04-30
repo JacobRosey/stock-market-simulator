@@ -1,4 +1,4 @@
-import { getDepthInfo, roundPrice } from './shared.js';
+import { getDepthInfo, getReferencePrice, roundPrice } from './shared.js';
 
 const thresholds = {
     TECH: { buy: 999, sell: -999 },
@@ -17,22 +17,22 @@ const TARGET_ACTIVE_SELL_VOLUME = 50;
 const MAX_SELL_INVENTORY_SHARE = 0.25;
 
 function buildQuote(getDepth, ticker, side) {
-    const { bestBid, bestAsk, mid } = getDepthInfo(getDepth, ticker);
-    if (!Number.isFinite(mid) && !Number.isFinite(bestBid) && !Number.isFinite(bestAsk)) {
+    const { bestBid, bestAsk } = getDepthInfo(getDepth, ticker);
+    const referencePrice = getReferencePrice(getDepth, ticker);
+    if (!Number.isFinite(referencePrice)) {
         return null;
     }
 
     const spread = Number.isFinite(bestAsk) && Number.isFinite(bestBid)
-        ? Math.max(0.04, bestAsk - bestBid)
+        ? Math.max(0.04, Math.min(bestAsk - bestBid, referencePrice * 0.02))
         : 0.1;
+    const halfSpread = spread / 2;
 
     if (side === 'BUY') {
-        const anchor = Number.isFinite(bestBid) ? bestBid : (Number.isFinite(mid) ? mid : bestAsk);
-        return roundPrice(anchor - spread * 0.25);
+        return roundPrice(referencePrice - halfSpread);
     }
 
-    const anchor = Number.isFinite(bestAsk) ? bestAsk : (Number.isFinite(mid) ? mid : bestBid);
-    return roundPrice(anchor + spread * 0.25);
+    return roundPrice(referencePrice + halfSpread);
 }
 
 function getSellTarget(totalShares) {
@@ -49,7 +49,6 @@ function onTick({ tickers, getDepth, getOpenOrderCount, getAvailableShares, getS
     for (const ticker of tickers) {
         const buyOpen = getOpenOrderCount(ticker, 'BUY');
         if (buyOpen < TARGET_ACTIVE_BUY_VOLUME) {
-            console.log(`market maker placing buy order for ${ticker}`)
             const buyPrice = buildQuote(getDepth, ticker, 'BUY');
             if (buyPrice) {
                 orders.push({
@@ -66,7 +65,6 @@ function onTick({ tickers, getDepth, getOpenOrderCount, getAvailableShares, getS
         const availableShares = getAvailableShares(ticker);
         const sellTarget = getSellTarget(getShares(ticker));
         if (sellOpen < sellTarget && availableShares >= 1) {
-            console.log(`market maker placing sell order for ${ticker}`)
             const sellPrice = buildQuote(getDepth, ticker, 'SELL');
             if (sellPrice) {
                 orders.push({

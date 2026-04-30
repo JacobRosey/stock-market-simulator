@@ -22,8 +22,12 @@ export function randomChoice(items) {
     return items[Math.floor(Math.random() * items.length)] ?? null;
 }
 
-export function normalizeSentiment(sentiment) {
-    return clamp((sentiment ?? 0) / 10, -1, 1);
+export function chooseOrderType(marketProbability = 0.3) {
+    return Math.random() < marketProbability ? 'MARKET' : 'LIMIT';
+}
+
+export function clampSentiment(sentiment) {
+    return clamp(sentiment ?? 0, -10, 10);
 }
 
 export function getDepthInfo(getDepth, ticker) {
@@ -43,6 +47,39 @@ export function getDepthInfo(getDepth, ticker) {
     return { depth, bestBid, bestAsk, mid };
 }
 
+export function getReferencePrice(getDepth, ticker) {
+    const { bestBid, bestAsk, mid, depth } = getDepthInfo(getDepth, ticker);
+    const lastPrice = Number(depth?.lastPrice ?? 0);
+    const hasLastPrice = Number.isFinite(lastPrice) && lastPrice > 0;
+    const hasTwoSidedBook = Number.isFinite(bestBid) && bestBid > 0 && Number.isFinite(bestAsk) && bestAsk > 0;
+
+    if (hasTwoSidedBook && Number.isFinite(mid) && mid > 0) {
+        const spread = bestAsk - bestBid;
+        const spreadRatio = hasLastPrice ? spread / lastPrice : 0;
+        if (spread > 0 && (!hasLastPrice || spreadRatio <= 0.05)) {
+            return mid;
+        }
+    }
+
+    if (hasLastPrice) {
+        return lastPrice;
+    }
+
+    if (Number.isFinite(mid) && mid > 0) {
+        return mid;
+    }
+
+    if (Number.isFinite(bestBid) && bestBid > 0) {
+        return bestBid;
+    }
+
+    if (Number.isFinite(bestAsk) && bestAsk > 0) {
+        return bestAsk;
+    }
+
+    return null;
+}
+
 function getArchetypeMultiplier(thresholds, archetype) {
     if (archetype === 'stable' || archetype === 'defensive') return thresholds.stable ?? 1;
     if (archetype === 'risky') return thresholds.risky ?? 1;
@@ -51,7 +88,7 @@ function getArchetypeMultiplier(thresholds, archetype) {
 }
 
 function resolveSectorThreshold(thresholds, sector) {
-    const fallback = thresholds.default ?? { buy: 0.4, sell: -0.4 };
+    const fallback = thresholds.default ?? { buy: 4, sell: -4 };
     if (!sector || !thresholds[sector]) return fallback;
     return {
         buy: thresholds[sector].buy ?? fallback.buy,
@@ -63,9 +100,9 @@ function scoreTickerForValue({ sentiment, ticker, thresholds, invert = false }) 
     const meta = tickerMeta.get(ticker);
     if (!meta) return null;
 
-    const baseSentiment = normalizeSentiment(sentiment ?? 0);
+    const baseSentiment = clampSentiment(sentiment ?? 0);
     const archetypeMultiplier = getArchetypeMultiplier(thresholds, meta.archetype);
-    const adjustedSentiment = clamp(baseSentiment * archetypeMultiplier, -2, 2);
+    const adjustedSentiment = clamp(baseSentiment * archetypeMultiplier, -10, 10);
     const effectiveSentiment = invert ? adjustedSentiment * -1 : adjustedSentiment;
     const sectorThresholds = resolveSectorThreshold(thresholds, meta.sector);
 
@@ -127,17 +164,14 @@ export function getNewsTickers(news) {
 }
 
 export function buildLimitPrice(getDepth, ticker, side, offset = 0) {
-    const { bestBid, bestAsk, mid } = getDepthInfo(getDepth, ticker);
+    const referencePrice = getReferencePrice(getDepth, ticker);
+    if (!Number.isFinite(referencePrice)) return null;
 
     if (side === 'BUY') {
-        const anchor = Number.isFinite(bestBid) ? bestBid : (Number.isFinite(mid) ? mid : bestAsk);
-        if (!Number.isFinite(anchor)) return null;
-        return roundPrice(anchor - offset);
+        return roundPrice(referencePrice - offset);
     }
 
-    const anchor = Number.isFinite(bestAsk) ? bestAsk : (Number.isFinite(mid) ? mid : bestBid);
-    if (!Number.isFinite(anchor)) return null;
-    return roundPrice(anchor + offset);
+    return roundPrice(referencePrice + offset);
 }
 
 export function randomizeQuantity(base, variance = 0) {

@@ -1,4 +1,4 @@
-import { buildLimitPrice, randomChoice, randomInt } from './shared.js';
+import { buildLimitPrice, chooseOrderType, randomChoice, randomInt } from './shared.js';
 
 // These thresholds aren't used since this bot just trades randomly
 const thresholds = {
@@ -20,7 +20,7 @@ function onTick({ tickers, getDepth }) {
     if (!ticker) return [];
 
     const side = Math.random() > 0.5 ? 'BUY' : 'SELL';
-    const type = Math.random() > 0.4 ? 'LIMIT' : 'MARKET';
+    const type = chooseOrderType(0.3);
     const quantity = randomInt(1, 7);
 
     if (type === 'MARKET') {

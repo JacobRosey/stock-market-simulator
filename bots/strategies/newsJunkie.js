@@ -1,4 +1,4 @@
-import { buildLimitPrice, getDepthInfo, getNewsTickers, randomChoice, randomInt, randomizeQuantity, scoreTickerForNews, scoreTickerForSentiment } from './shared.js';
+import { buildLimitPrice, chooseOrderType, getDepthInfo, getNewsTickers, randomChoice, randomInt, randomizeQuantity, scoreTickerForNews, scoreTickerForSentiment } from './shared.js';
 
 const thresholds = {
     TECH: { buy: 2, sell: -2 },
@@ -21,7 +21,7 @@ function onNews({ news, getDepth }) {
 
     return candidates.flatMap((signal) => {
         const quantity = randomizeQuantity(3 + signal.strength * 10, 1);
-        const type = signal.strength > 0.2 ? 'MARKET' : 'LIMIT';
+        const type = chooseOrderType(0.7);
         console.log(`News junkie trading ${quantity} ${signal.ticker} in ${type} ${signal.side} based on headline: ${news.headline}`)
         if (type === 'MARKET') {
             return [{ ticker: signal.ticker, side: signal.side, type, quantity }];
@@ -42,7 +42,7 @@ function onTick({ tickers, getDepth, sentimentByTicker }) {
     const sentimentSignal = sentimentCandidates[0];
     if (sentimentSignal && Math.random() < 0.7) {
         const quantity = randomizeQuantity(2 + sentimentSignal.strength * 8, 1);
-        const type = sentimentSignal.strength > 0.3 ? 'MARKET' : 'LIMIT';
+        const type = chooseOrderType(0.7);
 
         if (type === 'MARKET') {
             return [{
