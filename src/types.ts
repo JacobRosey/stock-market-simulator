@@ -23,11 +23,10 @@ export type CompanyTypes =
 
 export interface Stock {
     ticker: Ticker;
-    companyName: string;
+    name: string;
     sector: Sector;
     description: string;
-    currentPrice: number;
-    initialPrice: number;
+    price: number;
 }
 
 // Response from /api/stocks endpoint
@@ -43,6 +42,16 @@ export interface PriceUpdate {
     ticker: Ticker;
     price: number;
     timestamp: number;
+}
+
+export interface EstimatedValueRange {
+    low: number;
+    high: number;
+}
+
+export interface VolumeUpdate {
+    ticker: Ticker;
+    volumeDelta: number;
 }
 
 // ===== ORDER TYPES =====
@@ -131,11 +140,13 @@ export interface PositionDelta {
     sharesDelta: number;
     costDelta: number;
     reservedSharesDelta: number;
+    currentPrice?: number;
 }
 
 export interface PortfolioUpdate {
     cashDelta: number;
     reservedCashDelta: number;
+    depositedCashDelta?: number;
     positions: Record<string, PositionDelta>; // ticker -> deltas
 }
 
@@ -180,6 +191,7 @@ export interface NewsData {
     global: boolean; // does this effect the entire market or just one sector / company?
     stimulus: boolean; // does this inject cash into user accounts?
     isStimulus: boolean; // explicit flag for backend stimulus handling
+    stimulusCashAmount?: number;
     negativelyEffected: CompanyTypes[];
     positivelyEffected: CompanyTypes[];
     timestamp: number;
@@ -187,7 +199,7 @@ export interface NewsData {
 
 // ===== WEBSOCKET TYPES =====
 export interface WebSocketMessage<T = any> {
-    type: 'PRICE_UPDATE' | 'ORDER_FILLED' | 'PORTFOLIO_UPDATE' | 'NEWS' | 'TRADE_EXECUTED' | 'LEADERBOARD_UPDATE';
+    type: 'PRICE_UPDATE' | 'ORDER_FILLED' | 'PORTFOLIO_UPDATE' | 'NEWS' | 'TRADE_EXECUTED' | 'LEADERBOARD_UPDATE' | 'VOLUME_UPDATE' | 'ESTIMATED_VALUE_UPDATE';
     data: T;
     timestamp: number;
 }
@@ -208,6 +220,8 @@ export interface WebSocketContextValue {
     portfolio: Portfolio | null;
     leaderboard: LeaderboardEntry[];
     latestNews: NewsData | null;
+    volume24hByTicker: Partial<Record<Ticker, number>>;
+    estimatedValues: Partial<Record<Ticker, EstimatedValueRange>>;
     subscribeToTicker: (ticker: Ticker) => void;  
     getDepthForTicker: (ticker: Ticker) => OrderDepth | undefined; 
     attemptOrderCancellation: (orderId: Number, ticker: Ticker, type: OrderType, side: OrderSide) => void;
