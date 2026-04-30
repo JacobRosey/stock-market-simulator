@@ -70,6 +70,7 @@ export function generateNewsEvent() {
     const [minSentiment, maxSentiment] = template.sentimentRange;
     const sentiment = randomIntInclusive(minSentiment, maxSentiment);
     const isStimulus = template.isStimulus === true;
+    const stimulusCashAmount = isStimulus ? Number(template.stimulusCashAmount ?? 0) : undefined;
 
     if (template.scope === 'global') {
         const allCompanyTypes = dedupeCompanyTypes(
@@ -82,6 +83,7 @@ export function generateNewsEvent() {
             global: true,
             stimulus: isStimulus,
             isStimulus,
+            stimulusCashAmount,
             positivelyEffected: sentiment >= 0 ? allCompanyTypes : [],
             negativelyEffected: sentiment < 0 ? allCompanyTypes : [],
         };
@@ -112,6 +114,7 @@ export function generateNewsEvent() {
             global: false,
             stimulus: isStimulus,
             isStimulus,
+            stimulusCashAmount,
             positivelyEffected: sentiment >= 0 ? sectorTypes : [],
             negativelyEffected: sentiment < 0 ? sectorTypes : [],
         };
@@ -129,6 +132,7 @@ export function generateNewsEvent() {
         global: false,
         stimulus: isStimulus,
         isStimulus,
+        stimulusCashAmount,
         positivelyEffected: sentiment >= 0 ? selectedType : [],
         negativelyEffected: sentiment < 0 ? selectedType : [],
     };
