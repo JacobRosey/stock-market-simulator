@@ -905,11 +905,8 @@ int main()
                     std::string ticker = j["ticker"].get<std::string>();
                     std::string side = j["side"].get<std::string>();
 
-                    std::cout << "C++ : Attempting to cancel order id: " <<  orderId << " with ticker '" << ticker << "' on " << side << " side" << std::endl;
-                    
                     // Call cancelOrder with the extracted values
                     bool cancelled = engine.cancelOrder(orderId, ticker, side);
-                    std::cout << "Cancelled order: " << (cancelled ? "Successful" : "Failed") << std::endl;
                 }
                 
             } catch (const std::exception& e) {
@@ -981,9 +978,12 @@ int main()
         }
 
         auto rejected = engine.drainRejected(1000);
-        for (const auto &r : rejected) {
-            publisherRedis.publish("orders:rejected", r.toJson().dump());
+        if (rejected.size()){
+            json batch = json::array();
+            for (const auto& r : rejected) batch.push_back(r.toJson());
+            publisherRedis.publish("orders:rejected", batch.dump());
         }
+
         
         engine.publishAllDepths(publisherRedis, tickerPrices);
     } });
