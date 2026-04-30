@@ -16,6 +16,8 @@ import type {
     OrderRejectionUpdate,
     ToastMessage,
     LeaderboardEntry,
+    EstimatedValueRange,
+    VolumeUpdate,
 } from '../types';
 
 import { useAuth } from './AuthContext';
@@ -28,11 +30,14 @@ const MIN_TOAST_VISIBLE_MS = 3000;
 export const WebSocketProvider = () => {
     const [socket, setSocket] = useState<Socket | null>(null);
     const [prices, setPrices] = useState<Record<string, number>>({});
+    const pricesRef = useRef<Record<string, number>>({});
     const [userOrders, setUserOrders] = useState<Order[]>([]);
     const [ordersLoading, setOrdersLoading] = useState(true)
     const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
     const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
     const [latestNews, setLatestNews] = useState<NewsData | null>(null);
+    const [volume24hByTicker, setVolume24hByTicker] = useState<Partial<Record<Ticker, number>>>({});
+    const [estimatedValues, setEstimatedValues] = useState<Partial<Record<Ticker, EstimatedValueRange>>>({});
     const [isConnected, setIsConnected] = useState(false);
     const [lastMessageAt, setLastMessageAt] = useState<number | null>(null);
 
@@ -107,6 +112,29 @@ export const WebSocketProvider = () => {
         };
     }, []);
 
+    function applyPositionPrice(position: Portfolio['positions'][number], currentPrice: number) {
+        const currentValue = position.shares * currentPrice;
+        const gainLoss = currentValue - position.totalCost;
+
+        return {
+            ...position,
+            currentPrice,
+            currentValue,
+            gainLoss,
+            gainLossPercent: position.totalCost > 0 ? (gainLoss / position.totalCost) * 100 : 0,
+        };
+    }
+
+    function applyPortfolioPrices(portfolio: Portfolio, latestPrices: Record<string, number>): Portfolio {
+        return {
+            ...portfolio,
+            positions: portfolio.positions.map(position => {
+                const currentPrice = latestPrices[position.ticker];
+                return currentPrice > 0 ? applyPositionPrice(position, currentPrice) : position;
+            }),
+        };
+    }
+
     function applyPortfolioUpdate(prev: Portfolio, update: PortfolioUpdate, prices: Record<string, number>): Portfolio {
         const updatedPositions = prev.positions
             .map(p => {
@@ -115,18 +143,18 @@ export const WebSocketProvider = () => {
 
                 const newShares = p.shares + delta.sharesDelta;
                 const newCost = p.totalCost + delta.costDelta;
-                const currentPrice = prices[p.ticker] ?? p.currentPrice;
+                const currentPrice = delta.currentPrice ?? prices[p.ticker] ?? p.currentPrice;
                 const currentValue = newShares * currentPrice;
 
                 return {
                     ...p,
                     shares: newShares,
                     totalCost: newCost,
-                    averagePrice: newCost / newShares,
+                    averagePrice: newShares > 0 ? newCost / newShares : 0,
                     currentPrice,
                     currentValue,
                     gainLoss: currentValue - newCost,
-                    gainLossPercent: (currentValue - newCost) / newCost * 100,
+                    gainLossPercent: newCost > 0 ? (currentValue - newCost) / newCost * 100 : 0,
                 };
             })
             .filter(p => p.shares > 0);
@@ -134,7 +162,7 @@ export const WebSocketProvider = () => {
         // Handle new positions (buying something not previously held)
         for (const [ticker, delta] of Object.entries(update.positions)) {
             if (delta.sharesDelta > 0 && !prev.positions.find(p => p.ticker === ticker)) {
-                const currentPrice = prices[ticker] ?? 0;
+                const currentPrice = delta.currentPrice ?? prices[ticker] ?? 0;
                 const currentValue = delta.sharesDelta * currentPrice;
                 updatedPositions.push({
                     ticker,
@@ -168,7 +196,7 @@ export const WebSocketProvider = () => {
                     fetchLeaderboard()
                 ]);
                 setUserOrders(ordersData.orders || []);
-                setPortfolio(portfolioData);
+                setPortfolio(applyPortfolioPrices(portfolioData, pricesRef.current));
                 setLeaderboard(leaderboardData);
             } finally {
                 setOrdersLoading(false);
@@ -227,7 +255,20 @@ export const WebSocketProvider = () => {
                     ...prev,
                     [data.ticker]: data.lastPrice
                 }
+                pricesRef.current = newPrice;
                 return newPrice;
+            });
+            setPortfolio(prev => {
+                if (!prev || data.lastPrice <= 0) return prev;
+
+                return {
+                    ...prev,
+                    positions: prev.positions.map(position =>
+                        position.ticker === data.ticker
+                            ? applyPositionPrice(position, data.lastPrice)
+                            : position
+                    ),
+                };
             });
             setLastMessageAt(Date.now());
         });
@@ -295,8 +336,25 @@ export const WebSocketProvider = () => {
         newSocket.on('PORTFOLIO_UPDATE', (update: PortfolioUpdate) => {
             setPortfolio(prev => {
                 if (!prev) return prev;
-                return applyPortfolioUpdate(prev, update, prices);
+                return applyPortfolioUpdate(prev, update, pricesRef.current);
             });
+        });
+
+        newSocket.on('VOLUME_UPDATE', (data: VolumeUpdate) => {
+            setVolume24hByTicker(prev => ({
+                ...prev,
+                [data.ticker]: (prev[data.ticker] ?? 0) + data.volumeDelta,
+            }));
+            setLastMessageAt(Date.now());
+        });
+
+        newSocket.on('ESTIMATED_VALUE_UPDATE', (data: Partial<Record<Ticker, EstimatedValueRange>>) => {
+            console.log(data)
+            setEstimatedValues(prev => ({
+                ...prev,
+                ...data,
+            }));
+            setLastMessageAt(Date.now());
         });
 
         newSocket.on('LEADERBOARD_UPDATE', (data: LeaderboardEntry[] | { rankings: LeaderboardEntry[] }) => {
@@ -351,6 +409,8 @@ export const WebSocketProvider = () => {
             ordersLoading,
             leaderboard,
             latestNews,
+            volume24hByTicker,
+            estimatedValues,
             portfolio,
             isConnected,
             lastMessageAt,
