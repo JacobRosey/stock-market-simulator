@@ -1,6 +1,5 @@
 import type { OrderRequestData, StocksResponse } from "./types";
-
-const API_BASE = 'http://localhost:3000/api';
+import { API_BASE } from "./config";
 
 export const fetchStocks = async (): Promise<StocksResponse> => {
     try {
@@ -140,7 +139,7 @@ export const getOrderData = async () => {
     }
 }
 
-export const attemptOrderCancellation = async (id: Number, ticker: string, side: string) => {
+export const attemptOrderCancellation = async (id: number, ticker: string, side: string) => {
     try {
         const response = await fetch(`${API_BASE}/cancel-order`, {
             method: 'POST',

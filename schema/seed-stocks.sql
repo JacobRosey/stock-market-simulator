@@ -1,6 +1,6 @@
 USE marketsim;
 
-INSERT INTO stocks (ticker, name, sector, description, initial_price) VALUES
+INSERT INTO stocks (ticker, name, sector, description, price) VALUES
 -- TECHNOLOGY
 ('NEXUS', 'Nexus Technologies', 'TECH', 'Big tech giant, stable revenue, massive market cap, slow growth', 250.00),
 ('QCI', 'Quantum Computing Inc.', 'TECH', 'Cutting-edge tech, high risk/reward, volatile, potential moonshot', 45.00),
@@ -29,5 +29,10 @@ INSERT INTO stocks (ticker, name, sector, description, initial_price) VALUES
 ('GMED', 'GlobalMed', 'PHARMA', 'Big pharma giant, diverse drug portfolio, reliable earnings', 200.00),
 ('BIOV', 'BioVenture', 'PHARMA', 'Biotech startup, pipeline-driven, binary outcomes (FDA approvals)', 25.00),
 ('GENH', 'GenericHealth', 'PHARMA', 'Generic drug manufacturer, thin margins, volume business', 40.00),
-('NEURO', 'NeuroSynapse', 'PHARMA', 'Specialty neurology focus, niche market, high-margin drugs', 95.00);
+('NEURO', 'NeuroSynapse', 'PHARMA', 'Specialty neurology focus, niche market, high-margin drugs', 95.00)
+ON DUPLICATE KEY UPDATE
+    name = VALUES(name),
+    sector = VALUES(sector),
+    description = VALUES(description),
+    price = VALUES(price);
  

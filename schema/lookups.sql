@@ -11,5 +11,5 @@ LIMIT 1;  -- Stops after 1 row, index-only scan possible
 -- Chart data also uses same index
 SELECT price, timestamp FROM price_history 
 WHERE stock_id = ? 
-AND timestamp > NOW() - INTERVAL '1 day'
+AND timestamp > NOW() - INTERVAL 1 DAY
 ORDER BY timestamp DESC;

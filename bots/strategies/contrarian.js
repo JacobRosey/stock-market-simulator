@@ -1,12 +1,12 @@
-import { buildLimitPrice, chooseOrderType, getNewsTickers, randomizeQuantity, scoreTickerForNews, scoreTickerForSentiment } from './shared.js';
+import { buildLimitPrice, chooseSentimentOrderType, getNewsTickers, randomizeQuantity, scoreTickerForNews, scoreTickerForSentiment } from './shared.js';
 
 const thresholds = {
-    TECH: { buy: -4, sell: 4 },
-    PHARMA: { buy: -4, sell: 4 },
-    MANUFACTURING: { buy: -4, sell: 4 },
-    FINANCE: { buy: -4, sell: 4 },
-    RETAIL: { buy: -4, sell: 4 },
-    default: { buy: -4, sell: 4 },
+    TECH: { buy: 4, sell: -4 },
+    PHARMA: { buy: 4, sell: -4 },
+    MANUFACTURING: { buy: 4, sell: -4 },
+    FINANCE: { buy: 4, sell: -4 },
+    RETAIL: { buy: 4, sell: -4 },
+    default: { buy: 4, sell: -4 },
     stable: 0.9,
     risky: 1.6,
     cyclical: 1.1,
@@ -22,7 +22,7 @@ function onNews({ news, getDepth }) {
     if (!signal) return [];
 
     const quantity = randomizeQuantity(5 + signal.strength * 10, 1);
-    const type = chooseOrderType(0.7);
+    const type = chooseSentimentOrderType(signal, { strongSentimentThreshold: 9, strongStrengthThreshold: 5 });
     if (type === 'MARKET') {
         return [{ ticker: signal.ticker, side: signal.side, type, quantity }];
     }
@@ -44,7 +44,7 @@ function onTick({ tickers, getDepth, sentimentByTicker }) {
     if (!signal) return [];
 
     const quantity = randomizeQuantity(4 + signal.strength * 8, 1);
-    const type = chooseOrderType(0.7);
+    const type = chooseSentimentOrderType(signal, { strongSentimentThreshold: 9, strongStrengthThreshold: 5 });
     if (type === 'MARKET') {
         return [{
             ticker: signal.ticker,

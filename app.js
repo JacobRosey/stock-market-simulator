@@ -14,14 +14,45 @@ import { createMarketServices, tickers } from './helpers.js';
 dotenv.config();
 
 const app = express();
-const SERVER_PORT = process.env.SERVER_PORT || 3000;
-const SOCKET_PORT = process.env.SOCKET_PORT || 8080;
+const PORT = process.env.PORT || process.env.SERVER_PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET;
+const isProduction = process.env.NODE_ENV === 'production';
+
+const parseOrigins = (value) => (value || '')
+    .split(',')
+    .map(origin => origin.trim())
+    .filter(Boolean);
+
+const allowedOrigins = parseOrigins(process.env.ALLOWED_ORIGINS || process.env.CLIENT_ORIGIN);
+if (allowedOrigins.length === 0) {
+    allowedOrigins.push('http://localhost:5173');
+}
+
+const corsOrigin = (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+    }
+
+    return callback(new Error(`Origin ${origin} is not allowed by CORS`));
+};
+
+const sessionCookieOptions = {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? 'none' : 'lax',
+    maxAge: 24 * 60 * 60 * 1000
+};
+
+const clearSessionCookieOptions = {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? 'none' : 'lax'
+};
 
 app.use(express.json());
 
 const corsOptions = {
-    origin: 'http://localhost:5173',
+    origin: corsOrigin,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
@@ -45,7 +76,7 @@ const marketServices = createMarketServices({ db });
 let latestGeneratedNews = null;
 
 const websocket = createWebsocketServer(app, {
-    socketPort: SOCKET_PORT,
+    corsOptions,
     getEstimatedValueEntries: marketServices.getEstimatedValueEntries,
     getLatestGeneratedNews: () => latestGeneratedNews,
     getLatestLeaderboard: marketServices.getLatestLeaderboard,
@@ -105,16 +136,11 @@ app.post('/auth/register', async (req, res) => {
             { expiresIn: '24h' }
         );
 
-        res.cookie('paper-trader-session', token, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'strict',
-            maxAge: 24 * 60 * 60 * 1000
-        });
+        res.cookie('paper-trader-session', token, sessionCookieOptions);
 
         res.status(201).json({
             message: 'User created successfully',
-            user: { id: user.id, username: user.username }
+            user: { user_id: user.user_id, username: user.username }
         });
     } catch (error) {
         console.error('Registration error:', error);
@@ -146,12 +172,7 @@ app.post('/auth/login', async (req, res) => {
             { expiresIn: '24h' }
         );
 
-        res.cookie('paper-trader-session', token, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'strict',
-            maxAge: 24 * 60 * 60 * 1000
-        });
+        res.cookie('paper-trader-session', token, sessionCookieOptions);
 
         res.json({
             message: 'Login successful',
@@ -320,7 +341,7 @@ app.get('/api/stocks/:ticker/price-data', async (req, res) => {
 });
 
 app.post('/auth/logout', (req, res) => {
-    res.clearCookie('paper-trader-session');
+    res.clearCookie('paper-trader-session', clearSessionCookieOptions);
     res.json({ message: 'Logged out successfully' });
 });
 
@@ -471,11 +492,7 @@ app.get('/api/leaderboard', async (req, res) => {
     }
 });
 
-app.listen(SERVER_PORT, () => {
-    console.log(`Server running on port ${SERVER_PORT}`);
-});
-
-websocket.listen();
+websocket.listen(PORT);
 
 const redisLayer = await createRedisLayer({
     tickers,
@@ -503,6 +520,7 @@ const botManager = createBotManager({
     placeOrder: marketServices.placeOrder,
     cancelOrder: marketServices.cancelOrder,
     getDepth: marketServices.getDepth,
+    estimatedValueByTicker: marketServices.estimatedValueByTicker,
     logger: console
 });
 

@@ -6,6 +6,7 @@
 #include <atomic>
 #include <array>
 #include <condition_variable>
+#include <cstdlib>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -17,6 +18,12 @@
 using json = nlohmann::json;
 
 using namespace sw::redis;
+
+std::string getRedisUrl()
+{
+    const char *redisUrl = std::getenv("REDIS_URL");
+    return redisUrl && redisUrl[0] != '\0' ? redisUrl : "tcp://127.0.0.1:6379";
+}
 
 struct PriceLevel
 {
@@ -388,7 +395,7 @@ private:
     Redis redis;
 
 public:
-    MatchingEngine() : redis("tcp://127.0.0.1:6379")
+    MatchingEngine() : redis(getRedisUrl())
     {
         for (size_t i = 0; i < std::size(TICKERS); i++)
         {
@@ -872,14 +879,15 @@ int main()
     MatchingEngine engine;
 
     // Create a subscriber instance
-    Redis redis("tcp://127.0.0.1:6379");
+    const std::string redisUrl = getRedisUrl();
+    Redis redis(redisUrl);
     auto sub = redis.subscriber();
 
     // Redis subscriber thread
     std::thread subscriberThread([&engine, &running, &recoveryComplete]()
                                  {
         try {
-            Redis redis("tcp://127.0.0.1:6379");
+            Redis redis(getRedisUrl());
             std::this_thread::sleep_for(std::chrono::seconds(10)); // wait for redis to contain recovered orders
 
             OrderUtils::recoverFromRedis(engine, redis);  
@@ -906,6 +914,9 @@ int main()
                     std::string side = j["side"].get<std::string>();
 
                     // Call cancelOrder with the extracted values
+                    // change this to a cancel request object that returns success, orderId, userId?
+                    // otherwise i can't notify a user if their cancel went through or update their order from open to cancelled
+                    // check redis.js to see if I actually do that or not, prety sure i update database but no websocket
                     bool cancelled = engine.cancelOrder(orderId, ticker, side);
                 }
                 
@@ -960,7 +971,7 @@ int main()
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
     
-    Redis publisherRedis("tcp://127.0.0.1:6379");
+    Redis publisherRedis(getRedisUrl());
     
     std::unordered_map<std::string, uint64_t> tickerPrices;  
 

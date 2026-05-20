@@ -44,4 +44,5 @@ market-simulator/*.exe
 
 # notes to self
 *.md
+!DEPLOYMENT.md
 *.pdf

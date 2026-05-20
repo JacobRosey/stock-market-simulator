@@ -1,0 +1,8 @@
+node_modules
+dist
+.git
+.env
+engine
+engine.exe
+*.log
+npm-debug.log*

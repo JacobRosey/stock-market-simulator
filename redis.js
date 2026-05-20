@@ -13,7 +13,8 @@ export async function createRedisLayer({
     userToSocket,
     getBotManager
 }) {
-    const redisClient = new Redis();
+    const redisUrl = process.env.REDIS_URL;
+    const redisClient = redisUrl ? new Redis(redisUrl) : new Redis();
     const publisher = redisClient.duplicate();
     const subscriber = redisClient.duplicate();
 

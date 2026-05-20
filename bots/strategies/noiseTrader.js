@@ -20,7 +20,7 @@ function onTick({ tickers, getDepth }) {
     if (!ticker) return [];
 
     const side = Math.random() > 0.5 ? 'BUY' : 'SELL';
-    const type = chooseOrderType(0.3);
+    const type = chooseOrderType(0.1);
     const quantity = randomInt(1, 7);
 
     if (type === 'MARKET') {

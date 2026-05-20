@@ -2,7 +2,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 
 export function createWebsocketServer(app, {
-    socketPort,
+    corsOptions,
     getEstimatedValueEntries,
     getLatestGeneratedNews,
     getLatestLeaderboard,
@@ -13,11 +13,7 @@ export function createWebsocketServer(app, {
 }) {
     const server = createServer(app);
     const io = new Server(server, {
-        cors: {
-            origin: "*",
-            methods: ["GET", "POST"],
-            credentials: true
-        },
+        cors: corsOptions,
         transports: ['websocket', 'polling']
     });
 
@@ -101,9 +97,9 @@ export function createWebsocketServer(app, {
         });
     });
 
-    function listen() {
-        server.listen(socketPort, () => {
-            console.log(`Websocket server running on port ${socketPort}`);
+    function listen(port) {
+        server.listen(port, () => {
+            console.log(`HTTP and websocket server running on port ${port}`);
         });
     }
 

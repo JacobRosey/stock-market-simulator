@@ -1,12 +1,12 @@
-import { buildLimitPrice, chooseOrderType, randomChoice, randomizeQuantity, scoreTickerForSentiment } from './shared.js';
+import { buildLimitPrice, chooseSentimentOrderType, randomizeQuantity, scoreTickerForSentiment } from './shared.js';
 
 const thresholds = {
-    TECH: { buy: 2, sell: -7 },
-    PHARMA: { buy: 3, sell: -7 },
-    MANUFACTURING: { buy: 2, sell: -7 },
-    FINANCE: { buy: 2, sell: -7 },
-    RETAIL: { buy: 2, sell: -7 },
-    default: { buy: 2, sell: -7 },
+    TECH: { buy: 3, sell: -5 },
+    PHARMA: { buy: 4, sell: -5 },
+    MANUFACTURING: { buy: 3, sell: -5 },
+    FINANCE: { buy: 3, sell: -5 },
+    RETAIL: { buy: 3, sell: -5 },
+    default: { buy: 3, sell: -5 },
     stable: 0.6,
     risky: 1.2,
     cyclical: 1,
@@ -22,7 +22,7 @@ function onTick({ tickers, getDepth, sentimentByTicker }) {
     if (!signal) return [];
 
     const quantity = randomizeQuantity(7 + signal.strength * 12, 2);
-    const type = chooseOrderType(0.7);
+    const type = chooseSentimentOrderType(signal);
     if (type === 'MARKET') {
         return [{
             ticker: signal.ticker,

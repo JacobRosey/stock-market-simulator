@@ -224,7 +224,7 @@ export interface WebSocketContextValue {
     estimatedValues: Partial<Record<Ticker, EstimatedValueRange>>;
     subscribeToTicker: (ticker: Ticker) => void;  
     getDepthForTicker: (ticker: Ticker) => OrderDepth | undefined; 
-    attemptOrderCancellation: (orderId: Number, ticker: Ticker, type: OrderType, side: OrderSide) => void;
+    attemptOrderCancellation: (orderId: number, ticker: Ticker, type: OrderType, side: OrderSide) => void;
     addOrder: (order: Order) => void;
     toast: ToastMessage | null;
     clearToast: () => void;

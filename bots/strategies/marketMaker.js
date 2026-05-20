@@ -90,6 +90,7 @@ export default {
     displayName: 'Market Maker',
     username: 'bot_market_maker',
     intervalMs: 3_000,
+    backgroundFlow: false,
     thresholds,
     onTick,
     onNews,

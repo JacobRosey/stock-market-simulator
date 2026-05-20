@@ -22,6 +22,7 @@ import type {
 
 import { useAuth } from './AuthContext';
 import { fetchLeaderboard, fetchPortfolio, getOrderData } from '../api';
+import { SOCKET_URL } from '../config';
 import ToastMessages from '../components/game/toast';
 
 const WebSocketContext = createContext<WebSocketContextValue | null>(null);
@@ -227,7 +228,7 @@ export const WebSocketProvider = () => {
             return;
         }
 
-        const newSocket = io(import.meta.env.VITE_SOCKET_URL || 'http://localhost:8080', {
+        const newSocket = io(SOCKET_URL, {
             transports: ['websocket', 'polling'], //fallback to polling
             reconnectionAttempts: 5
         });
@@ -385,7 +386,7 @@ export const WebSocketProvider = () => {
         }
     }, [socket]);
 
-    const attemptOrderCancellation = useCallback((orderId: Number, ticker: Ticker, type: OrderType, side: OrderSide) => {
+    const attemptOrderCancellation = useCallback((orderId: number, ticker: Ticker, type: OrderType, side: OrderSide) => {
         // Backend uses socketId to get userId which is used to verify that this cancel request
         // is actually coming from the person who submitted the order
         if (socket) {

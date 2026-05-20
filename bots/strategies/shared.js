@@ -26,6 +26,33 @@ export function chooseOrderType(marketProbability = 0.3) {
     return Math.random() < marketProbability ? 'MARKET' : 'LIMIT';
 }
 
+export function chooseSentimentOrderType(signal, options = {}) {
+    const {
+        strongSentimentThreshold = 8,
+        strongStrengthThreshold = 4,
+        baseMarketProbability = 0.08,
+        maxMarketProbability = 0.7,
+        probabilityStep = 0.16,
+    } = options;
+    const sentimentConviction = Math.abs(clampSentiment(signal?.sentiment ?? 0));
+    const strengthConviction = Math.max(0, Number(signal?.strength ?? 0));
+    const sentimentExcess = sentimentConviction - strongSentimentThreshold;
+    const strengthExcess = strengthConviction - strongStrengthThreshold;
+    const excess = Math.max(sentimentExcess, strengthExcess);
+
+    if (excess < 0) {
+        return 'LIMIT';
+    }
+
+    const marketProbability = clamp(
+        baseMarketProbability + excess * probabilityStep,
+        baseMarketProbability,
+        maxMarketProbability
+    );
+
+    return chooseOrderType(marketProbability);
+}
+
 export function clampSentiment(sentiment) {
     return clamp(sentiment ?? 0, -10, 10);
 }
@@ -172,6 +199,20 @@ export function buildLimitPrice(getDepth, ticker, side, offset = 0) {
     }
 
     return roundPrice(referencePrice + offset);
+}
+
+export function buildTakerLimitPrice(getDepth, ticker, side) {
+    const { bestBid, bestAsk } = getDepthInfo(getDepth, ticker);
+
+    if (side === 'BUY' && Number.isFinite(bestAsk) && bestAsk > 0) {
+        return roundPrice(bestAsk);
+    }
+
+    if (side === 'SELL' && Number.isFinite(bestBid) && bestBid > 0) {
+        return roundPrice(bestBid);
+    }
+
+    return buildLimitPrice(getDepth, ticker, side, 0);
 }
 
 export function randomizeQuantity(base, variance = 0) {

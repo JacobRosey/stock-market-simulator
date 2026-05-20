@@ -323,7 +323,7 @@ export default function Chart({ ticker }: ChartProps) {
             />
             <YAxis
               domain={priceDomain}
-              tickFormatter={(price: number) => `$${price}`}
+              tickFormatter={(price: number) => `$${formatMoney(price)}`}
             />
             <Tooltip
               labelFormatter={(ts: any) => new Date(ts).toLocaleString()}

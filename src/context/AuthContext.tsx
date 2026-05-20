@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react'
+import { API_ORIGIN } from '../config'
 
 type User = {
     user_id: string
@@ -16,8 +17,6 @@ type AuthContextType = {
 
 const AuthContext = createContext<AuthContextType | null>(null)
 
-const API_URL = 'http://localhost:3000'
-
 export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [isAuthenticated, setIsAuthenticated] = useState(false)
     const [loading, setLoading] = useState(true)
@@ -25,7 +24,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     // Check session on app load
     useEffect(() => {
-        fetch('http://localhost:3000/auth/me', {
+        fetch(`${API_ORIGIN}/auth/me`, {
             credentials: 'include',
         })
             .then(async res => {
@@ -47,7 +46,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }, []);
 
     const login = async (username: string, password: string) => {
-        const res = await fetch(`${API_URL}/auth/login`, {
+        const res = await fetch(`${API_ORIGIN}/auth/login`, {
             method: 'POST',
             credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
@@ -68,7 +67,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     const register = async (username: string, password: string) => {
-        const res = await fetch(`${API_URL}/auth/register`, {
+        const res = await fetch(`${API_ORIGIN}/auth/register`, {
             method: 'POST',
             credentials: 'include',
             headers: { 'Content-Type': 'application/json' },
@@ -87,7 +86,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     const logout = async () => {
-        await fetch(`${API_URL}/auth/logout`, {
+        await fetch(`${API_ORIGIN}/auth/logout`, {
             method: 'POST',
             credentials: 'include',
         })
