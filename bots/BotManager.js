@@ -36,6 +36,8 @@ const POSITION_REBALANCE_TARGET_SHARE = 0.09;
 const POSITION_REBALANCE_MAX_POSITION_SHARE = 0.2;
 const POSITION_REBALANCE_MAX_OPEN_SELL_SHARE = 0.35;
 const POSITION_REBALANCE_COOLDOWN_MS = 25_000;
+const FAIR_VALUE_SELL_BUFFER = 0.05;
+const FAIR_VALUE_BUY_BUFFER = 0.08;
 
 const BOT_TICKERS = COMPANY_TYPES.map((company) => company.ticker);
 const COMPANY_BY_TICKER = new Map(COMPANY_TYPES.map((company) => [company.ticker, company]));
@@ -333,6 +335,7 @@ class BotRuntime {
                 getOpenOrderCount: (ticker, side) => this.getOpenOrderCount(ticker, side),
                 getAvailableShares: (ticker) => this.getAvailableShares(ticker),
                 getShares: (ticker) => this.getShares(ticker),
+                getBuyingPower: () => Math.max(0, this.cash - this.reservedCash),
                 sentimentByTicker: this._getActionableSentimentSnapshot(),
                 estimatedValueByTicker: this.estimatedValueByTicker,
                 getSentiment: (ticker) => this._isSentimentActionable(ticker)
@@ -475,6 +478,36 @@ class BotRuntime {
         return true;
     }
 
+    _getFairValueBias(ticker, referencePrice = null) {
+        const estimatedValue = this.estimatedValueByTicker?.get?.(ticker);
+        if (!estimatedValue) return null;
+
+        const low = Number(estimatedValue.low ?? 0);
+        const high = Number(estimatedValue.high ?? 0);
+        const price = Number.isFinite(referencePrice)
+            ? referencePrice
+            : getReferencePrice(this.getDepth, ticker);
+
+        if (
+            !Number.isFinite(low) || low <= 0
+            || !Number.isFinite(high) || high <= 0
+            || !Number.isFinite(price) || price <= 0
+        ) {
+            return null;
+        }
+
+        const estimatedLow = Math.min(low, high);
+        const estimatedHigh = Math.max(low, high);
+        if (price < estimatedLow) {
+            return (estimatedLow - price) / price;
+        }
+        if (price > estimatedHigh) {
+            return -((price - estimatedHigh) / price);
+        }
+
+        return 0;
+    }
+
     _buildExitIntents() {
         const intents = [];
         const now = Date.now();
@@ -498,6 +531,11 @@ class BotRuntime {
             const isTakeProfit = gainPercent >= EXIT_TRIGGER_STEP;
             const isStopLoss = gainPercent <= -EXIT_TRIGGER_STEP;
             if (!isTakeProfit && !isStopLoss) continue;
+
+            const fairValueBias = this._getFairValueBias(ticker, referencePrice);
+            if (isStopLoss && fairValueBias !== null && fairValueBias > -FAIR_VALUE_SELL_BUFFER) {
+                continue;
+            }
 
             const openSellQuantity = this.getOpenOrderCount(ticker, 'SELL');
             const maxOpenSellQuantity = Math.max(1, Math.floor(shares * EXIT_MAX_OPEN_SELL_SHARE));
@@ -575,6 +613,9 @@ class BotRuntime {
 
             const referencePrice = getReferencePrice(this.getDepth, ticker);
             if (!Number.isFinite(referencePrice) || referencePrice <= 0) continue;
+
+            const fairValueBias = this._getFairValueBias(ticker, referencePrice);
+            if (fairValueBias !== null && fairValueBias > FAIR_VALUE_BUY_BUFFER) continue;
 
             const positionValue = shares * referencePrice;
             const portfolioShare = positionValue / portfolioValue;
@@ -699,12 +740,18 @@ class BotRuntime {
         if (availableShares < 1) return 'BUY';
 
         const referencePrice = getReferencePrice(this.getDepth, ticker);
+        const fairValueBias = this._getFairValueBias(ticker, referencePrice);
+        if (fairValueBias !== null && fairValueBias >= FAIR_VALUE_BUY_BUFFER) {
+            return 'BUY';
+        }
+
         const buyingPower = Math.max(0, this.cash - this.reservedCash);
         if (Number.isFinite(referencePrice) && referencePrice > 0 && buyingPower < referencePrice) {
             return 'SELL';
         }
 
-        const buyProbability = clamp(0.5 + sentiment * 0.025, 0.2, 0.8);
+        const valuationTilt = fairValueBias === null ? 0 : clamp(fairValueBias, -1, 1) * 0.25;
+        const buyProbability = clamp(0.5 + sentiment * 0.025 + valuationTilt, 0.2, 0.85);
         return Math.random() < buyProbability ? 'BUY' : 'SELL';
     }
 
@@ -838,12 +885,13 @@ class BotRuntime {
 }
 
 export class BotManager {
-    constructor({ db, placeOrder, cancelOrder, getDepth, estimatedValueByTicker, logger = console }) {
+    constructor({ db, placeOrder, cancelOrder, getDepth, estimatedValueByTicker, userToSocket, logger = console }) {
         this.db = db;
         this.placeOrder = placeOrder;
         this.cancelOrder = cancelOrder;
         this.getDepth = getDepth;
         this.estimatedValueByTicker = estimatedValueByTicker ?? new Map();
+        this.userToSocket = userToSocket ?? new Map();
         this.logger = logger;
         this.runtimes = [];
         this.byUserId = new Map();
@@ -852,6 +900,7 @@ export class BotManager {
         this.volume24hByTicker = new Map(BOT_TICKERS.map((ticker) => [ticker, 0]));
         this.lastTradeAtByTicker = new Map(BOT_TICKERS.map((ticker) => [ticker, 0]));
         this._sentimentDecayTimer = null;
+        this._active = false;
     }
 
     async start() {
@@ -866,15 +915,40 @@ export class BotManager {
         this.runtimes = runtimes;
         this.byUserId = new Map(runtimes.map((runtime) => [runtime.userId, runtime]));
 
+        this.syncActivityWithUsers();
+        this.logger.log(`Initialized ${this.runtimes.length} bot runtimes.`);
+    }
+
+    stop() {
+        this.pause();
+        this.runtimes = [];
+        this.byUserId.clear();
+    }
+
+    syncActivityWithUsers() {
+        if (this.userToSocket.size > 0) {
+            this.resume();
+            return;
+        }
+
+        this.pause();
+    }
+
+    resume() {
+        if (this._active || this.runtimes.length === 0) return;
+
         for (const runtime of this.runtimes) {
             runtime.startTicking();
         }
 
         this._startSentimentDecayTimer();
-        this.logger.log(`Started ${this.runtimes.length} bot runtimes.`);
+        this._active = true;
+        this.logger.log(`Resumed ${this.runtimes.length} bot runtimes; ${this.userToSocket.size} user(s) connected.`);
     }
 
-    stop() {
+    pause() {
+        if (!this._active) return;
+
         for (const runtime of this.runtimes) {
             runtime.stopTicking();
         }
@@ -882,13 +956,15 @@ export class BotManager {
             clearInterval(this._sentimentDecayTimer);
             this._sentimentDecayTimer = null;
         }
-        this.runtimes = [];
-        this.byUserId.clear();
+
+        this._active = false;
+        this.logger.log('Paused bot runtimes; no users connected.');
     }
 
     async onNews(news) {
         if (!news) return;
         this._applyNewsSentiment(news);
+        if (!this._active) return;
 
         const reactions = this.runtimes.map((runtime) => runtime.reactToNews(news));
         await Promise.all(reactions);

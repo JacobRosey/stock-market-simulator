@@ -9,7 +9,8 @@ export function createWebsocketServer(app, {
     broadcastLeaderboardUpdate,
     getDepth,
     verifyOrderOwnership,
-    publishCancelOrder
+    publishCancelOrder,
+    onUserConnectionsChanged = () => {}
 }) {
     const server = createServer(app);
     const io = new Server(server, {
@@ -20,11 +21,41 @@ export function createWebsocketServer(app, {
     const userToSocket = new Map();
     const socketToUser = new Map();
 
+    function notifyUserConnectionsChanged() {
+        onUserConnectionsChanged(userToSocket.size);
+    }
+
+    function getAnotherSocketForUser(userId, disconnectedSocketId) {
+        for (const [socketId, registeredUserId] of socketToUser.entries()) {
+            if (registeredUserId !== userId || socketId === disconnectedSocketId) {
+                continue;
+            }
+
+            const socket = io.sockets.sockets.get(socketId);
+            if (socket?.connected) {
+                return socket;
+            }
+        }
+
+        return null;
+    }
+
     io.on('connection', (socket) => {
         socket.on('register', (userId) => {
+            const previousUserId = socketToUser.get(socket.id);
+            if (previousUserId && previousUserId !== userId && userToSocket.get(previousUserId) === socket) {
+                const replacementSocket = getAnotherSocketForUser(previousUserId, socket.id);
+                if (replacementSocket) {
+                    userToSocket.set(previousUserId, replacementSocket);
+                } else {
+                    userToSocket.delete(previousUserId);
+                }
+            }
+
             userToSocket.set(userId, socket);
             socketToUser.set(socket.id, userId);
             console.log(`User ${socketToUser.get(socket.id)} registered with socket ${userToSocket.get(userId).id}`);
+            notifyUserConnectionsChanged();
 
             const latestGeneratedNews = getLatestGeneratedNews();
             if (latestGeneratedNews) {
@@ -88,7 +119,15 @@ export function createWebsocketServer(app, {
 
         socket.on('disconnect', () => {
             const userId = socketToUser.get(socket.id);
-            userToSocket.delete(userId);
+            if (userToSocket.get(userId) === socket) {
+                const replacementSocket = getAnotherSocketForUser(userId, socket.id);
+                if (replacementSocket) {
+                    userToSocket.set(userId, replacementSocket);
+                } else {
+                    userToSocket.delete(userId);
+                }
+                notifyUserConnectionsChanged();
+            }
             socketToUser.delete(socket.id);
         });
 

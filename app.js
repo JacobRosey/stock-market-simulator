@@ -89,7 +89,10 @@ const websocket = createWebsocketServer(app, {
     broadcastLeaderboardUpdate: marketServices.broadcastLeaderboardUpdate,
     getDepth: marketServices.getDepth,
     verifyOrderOwnership: marketServices.verifyOrderOwnership,
-    publishCancelOrder: marketServices.publishCancelOrder
+    publishCancelOrder: marketServices.publishCancelOrder,
+    onUserConnectionsChanged: () => {
+        marketServices.getBotManager()?.syncActivityWithUsers();
+    }
 });
 
 marketServices.setIo(websocket.io);
@@ -559,6 +562,7 @@ const botManager = createBotManager({
     cancelOrder: marketServices.cancelOrder,
     getDepth: marketServices.getDepth,
     estimatedValueByTicker: marketServices.estimatedValueByTicker,
+    userToSocket: websocket.userToSocket,
     logger: console
 });
 

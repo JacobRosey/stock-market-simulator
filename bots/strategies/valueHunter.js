@@ -1,9 +1,12 @@
-import { buildTakerLimitPrice, chooseOrderType, getReferencePrice, randomizeQuantity } from './shared.js';
+import { buildTakerLimitPrice, chooseOrderType, getDepthInfo, getReferencePrice, randomizeQuantity } from './shared.js';
 
 const MIN_VALUATION_BIAS = 0.04;
 const FULL_AGGRESSION_BIAS = 0.25;
 const MIN_MARKET_PROBABILITY = 0.05;
-const MAX_MARKET_PROBABILITY = 0.2;
+const MAX_MARKET_PROBABILITY = 0.65;
+const MAX_OPEN_BUY_QUANTITY = 600;
+const MAX_NORMAL_QUANTITY = 60;
+const MAX_BARGAIN_QUANTITY = 500;
 
 function getAggression(absBias) {
     return Math.min(1, Math.max(0, (absBias - MIN_VALUATION_BIAS) / (
@@ -37,7 +40,25 @@ function getValuation(ticker, estimatedValueByTicker, getDepth) {
     return { bias: 0 };
 }
 
-function onTick({ tickers, getDepth, getAvailableShares, estimatedValueByTicker }) {
+function getBuyQuantity(absBias, price, buyingPower) {
+    const aggression = getAggression(absBias);
+    const deepValueBonus = Math.min(MAX_BARGAIN_QUANTITY - MAX_NORMAL_QUANTITY, Math.floor(absBias * 40));
+    const desiredQuantity = randomizeQuantity(8 + aggression * 42 + deepValueBonus, 3);
+    const maxQuantity = absBias >= 1 ? MAX_BARGAIN_QUANTITY : MAX_NORMAL_QUANTITY;
+    const affordableQuantity = Number.isFinite(price) && price > 0
+        ? Math.floor(buyingPower / price)
+        : maxQuantity;
+    if (affordableQuantity < 1) return 0;
+
+    return Math.max(1, Math.min(maxQuantity, desiredQuantity, affordableQuantity));
+}
+
+function getSellQuantity(absBias) {
+    const aggression = getAggression(absBias);
+    return randomizeQuantity(3 + aggression * 10, 1);
+}
+
+function onTick({ tickers, getDepth, getAvailableShares, getOpenOrderCount, getBuyingPower, estimatedValueByTicker }) {
     const candidates = tickers
         .map((ticker) => {
             const valuation = getValuation(ticker, estimatedValueByTicker, getDepth);
@@ -45,6 +66,7 @@ function onTick({ tickers, getDepth, getAvailableShares, estimatedValueByTicker 
             if (absBias < MIN_VALUATION_BIAS) return null;
 
             const side = valuation.bias > 0 ? 'BUY' : 'SELL';
+            if (side === 'BUY' && getOpenOrderCount(ticker, 'BUY') >= MAX_OPEN_BUY_QUANTITY) return null;
             if (side === 'SELL' && getAvailableShares(ticker) < 1) return null;
 
             return {
@@ -61,15 +83,22 @@ function onTick({ tickers, getDepth, getAvailableShares, estimatedValueByTicker 
     if (!signal) return [];
 
     const aggression = getAggression(signal.absBias);
-    const quantity = randomizeQuantity(4 + aggression * 18, 2);
     const marketProbability = MIN_MARKET_PROBABILITY
         + aggression * (MAX_MARKET_PROBABILITY - MIN_MARKET_PROBABILITY);
     const type = chooseOrderType(marketProbability);
+    const price = type === 'MARKET'
+        ? getDepthInfo(getDepth, signal.ticker).bestAsk ?? getReferencePrice(getDepth, signal.ticker)
+        : buildTakerLimitPrice(getDepth, signal.ticker, signal.side);
+    const quantity = signal.side === 'BUY'
+        ? getBuyQuantity(signal.absBias, price, getBuyingPower())
+        : getSellQuantity(signal.absBias);
+
+    if (quantity < 1) return [];
+
     if (type === 'MARKET') {
         return [{ ticker: signal.ticker, side: signal.side, type, quantity }];
     }
 
-    const price = buildTakerLimitPrice(getDepth, signal.ticker, signal.side);
     if (!price) return [];
 
     return [{
@@ -86,5 +115,7 @@ export default {
     displayName: 'Value Hunter',
     username: 'bot_value_hunter',
     intervalMs: 1400,
+    backgroundFlow: false,
+    positionRebalance: false,
     onTick,
 };
