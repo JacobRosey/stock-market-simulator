@@ -281,9 +281,7 @@ export const WebSocketProvider = () => {
 
         newSocket.on('CANCEL_UPDATE', (data) => {
             console.log(data)
-            // Update the cancelled order - this just removes it
-
-            // setUserOrders(prev => prev.filter(order => order.orderId !== data.orderId));
+            setUserOrders(prev => prev.filter(order => order.orderId !== data.orderId));
         })
 
         newSocket.on('ORDER_PLACED', (newOrder: Order) => {

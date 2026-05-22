@@ -57,7 +57,7 @@ export interface VolumeUpdate {
 // ===== ORDER TYPES =====
 export type OrderSide = 'BUY' | 'SELL';
 export type OrderType = "MARKET" | "LIMIT";
-export type OrderStatus = 'OPEN' | 'FILLED' | 'PARTIALLY_FILLED' | 'CANCELLED' | 'REJECTED';
+export type OrderStatus = 'OPEN' | 'FILLED' | 'PARTIALLY_FILLED' | 'CANCELED' | 'CANCELLED' | 'REJECTED';
 
 export interface Order {
     orderId: number;

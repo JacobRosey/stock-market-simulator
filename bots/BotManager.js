@@ -264,6 +264,50 @@ class BotRuntime {
         return count;
     }
 
+    _getOwnOpenLimitBoundary(ticker, side) {
+        const prices = [];
+        for (const order of this.openOrders.values()) {
+            if (
+                order.ticker !== ticker
+                || order.side !== side
+                || order.type !== 'LIMIT'
+                || order.remainingQuantity <= 0
+                || order.cancelRequested
+            ) {
+                continue;
+            }
+
+            const price = Number(order.price ?? 0);
+            if (Number.isFinite(price) && price > 0) {
+                prices.push(price);
+            }
+        }
+
+        if (prices.length === 0) return null;
+        return side === 'BUY'
+            ? Math.max(...prices)
+            : Math.min(...prices);
+    }
+
+    _wouldCrossOwnOpenLimitOrder({ ticker, side, type, price }) {
+        if (type !== 'LIMIT') return false;
+
+        const orderPrice = Number(price ?? 0);
+        if (!Number.isFinite(orderPrice) || orderPrice <= 0) return false;
+
+        if (side === 'SELL') {
+            const highestOwnBid = this._getOwnOpenLimitBoundary(ticker, 'BUY');
+            return Number.isFinite(highestOwnBid) && orderPrice <= highestOwnBid;
+        }
+
+        if (side === 'BUY') {
+            const lowestOwnAsk = this._getOwnOpenLimitBoundary(ticker, 'SELL');
+            return Number.isFinite(lowestOwnAsk) && orderPrice >= lowestOwnAsk;
+        }
+
+        return false;
+    }
+
     async reactToNews(news) {
         if (!this.strategy.onNews) return;
         await this._execute((context) => this.strategy.onNews(context), news);
@@ -383,6 +427,10 @@ class BotRuntime {
 
         const price = intent.type === 'LIMIT' ? Number(intent.price) : null;
         if (intent.type === 'LIMIT' && (!Number.isFinite(price) || price <= 0)) {
+            return false;
+        }
+
+        if (this._wouldCrossOwnOpenLimitOrder({ ...intent, price })) {
             return false;
         }
 

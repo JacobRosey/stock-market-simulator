@@ -58,8 +58,13 @@ export async function createRedisLayer({
         if (channel == "orders:cancel") {
             try {
                 const data = JSON.parse(message);
-                await cancelOrderInDatabase(data.orderId);
+                const canceledOrder = await cancelOrderInDatabase(data.orderId);
+                if (!canceledOrder) return;
+
                 getBotManager()?.onOrderCanceled(data.orderId);
+
+                const socket = userToSocket.get(canceledOrder.userId);
+                socket?.emit('CANCEL_UPDATE', canceledOrder);
             } catch (e) {
                 console.error(e);
             }

@@ -73,8 +73,8 @@ export function createWebsocketServer(app, {
                 if (result.user_id !== userId) {
                     return socket.emit('error', 'Not your order');
                 }
-                if (result.status != "OPEN") {
-                    return socket.emit('error', 'Order is already filled');
+                if (!['OPEN', 'PARTIALLY_FILLED'].includes(result.status)) {
+                    return socket.emit('error', 'Order is already filled or cancelled');
                 }
 
                 data.userId = userId;

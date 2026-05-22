@@ -733,7 +733,7 @@ export function createMarketServices({ db }) {
             await connection.beginTransaction();
 
             const [orders] = await connection.query(
-                `SELECT user_id, ticker, side, quantity, filled_quantity, estimated_amount, filled_cost, status
+                `SELECT user_id, ticker, side, type, price, quantity, filled_quantity, estimated_amount, filled_cost, status
                  FROM orders
                  WHERE id = ?
                  FOR UPDATE`,
@@ -781,7 +781,21 @@ export function createMarketServices({ db }) {
             );
 
             await connection.commit();
-            return result;
+            if (result.affectedRows === 0) {
+                return null;
+            }
+
+            return {
+                orderId,
+                userId: order.user_id,
+                ticker: order.ticker,
+                side: order.side,
+                type: order.type,
+                price: Number(order.price ?? 0),
+                quantity: Number(order.quantity ?? 0),
+                filledQuantity: Number(order.filled_quantity ?? 0),
+                status: 'CANCELED'
+            };
         } catch (err) {
             await connection.rollback();
             console.error('Error in cancelOrderInDatabase: ', err);
