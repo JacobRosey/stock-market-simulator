@@ -62,6 +62,32 @@ function roundMoney(amount) {
     return Math.round(amount * 100) / 100;
 }
 
+async function ensureBotUsers(connection) {
+    const botPasswordHash = '$2b$10$VJ3zD8n9xlEMvE4y.z4Vlu.NFjWqz7F5gqRZkNQY2ksPJ4p5z7X0e';
+    let createdBots = 0;
+
+    for (const username of BOT_USERNAMES) {
+        const [existingUsers] = await connection.query(
+            'SELECT user_id FROM users WHERE username = ?',
+            [username]
+        );
+
+        if (existingUsers.length === 0) {
+            await connection.query(
+                `INSERT INTO users (username, p_hash, cash, reserved_cash, deposited_cash)
+                 VALUES (?, ?, 0.00, 0.00, 0.00)`,
+                [username, botPasswordHash]
+            );
+
+            createdBots += 1;
+        } else if (existingUsers.length > 1) {
+            throw new Error(`Expected at most one user for ${username}, found ${existingUsers.length}.`);
+        }
+    }
+
+    return createdBots;
+}
+
 function createDbConnection() {
     return mysql.createConnection({
         host: process.env.DB_HOST,
@@ -229,17 +255,20 @@ export async function restartSeason() {
         await connection.query('DELETE FROM portfolio');
 
         await resetStockPrices(connection);
+
+        const botsCreated = await ensureBotUsers(connection);
+
         await resetHumanAccounts(connection);
 
         for (const username of BOT_USERNAMES) {
             await resetBotPortfolio(connection, username);
         }
-
         const marketMakerLiquidity = await seedMarketMakerLiquidity(connection);
 
         await connection.commit();
 
         return {
+            botsCreated,
             botsReset: BOT_USERNAMES.length,
             stocksReset: STARTING_STOCKS.length,
             marketMakerLiquidity,
@@ -261,6 +290,7 @@ if (isDirectRun) {
     restartSeason()
         .then((result) => {
             console.log('Season restart completed.');
+            console.log(`Bots created: ${result.botsCreated}`);
             console.log(`Bots reset: ${result.botsReset}`);
             console.log(`Stocks reset: ${result.stocksReset}`);
             console.log(`Market maker orders seeded: ${result.marketMakerLiquidity.ordersSeeded}`);
