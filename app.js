@@ -11,6 +11,12 @@ import { createWebsocketServer } from './websocket.js';
 import { createRedisLayer } from './redis.js';
 import { createMarketServices, tickers } from './helpers.js';
 
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 dotenv.config();
 
 const app = express();
@@ -490,6 +496,12 @@ app.get('/api/leaderboard', async (req, res) => {
         console.error('Error fetching leaderboard:', error);
         res.status(500).json({ error: 'Failed to fetch leaderboard data' });
     }
+});
+
+app.use(express.static(path.join(__dirname, 'dist')));
+
+app.get(/^(?!\/api|\/auth).*/, (req, res) => {
+  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 
 websocket.listen(PORT);
