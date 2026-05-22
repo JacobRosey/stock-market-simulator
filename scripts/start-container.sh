@@ -4,6 +4,9 @@ set -e
 ./engine &
 ENGINE_PID=$!
 
+echo "Running season setup..."
+node scripts/restart-season.js
+
 node app.js &
 APP_PID=$!
 
