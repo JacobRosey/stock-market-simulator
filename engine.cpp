@@ -999,18 +999,16 @@ int main()
         engine.publishAllDepths(publisherRedis, tickerPrices);
     } });
 
-    std::cout << "Press Ctrl+C to stop..." << std::endl;
-    std::cin.get();
+    std::cout << "Matching engine running..." << std::endl;
 
-    // The code below doesn't actually execute, ctrl+c just terminates the program immediately
-    // Need to implement signal handler
+    while (running) {
+        std::this_thread::sleep_for(std::chrono::seconds(60));
+    }
 
-    running = false;
     matchingThread.join();
     subscriberThread.join();
     publisherThread.join();
 
     std::cout << "Engine stopped" << std::endl;
-
     return 0;
 }
