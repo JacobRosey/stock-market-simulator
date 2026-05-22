@@ -1,4 +1,4 @@
-import { buildLimitPrice, chooseSentimentOrderType, randomizeQuantity, scoreTickerForSentiment } from './shared.js';
+import { buildLimitPrice, chooseOrderTypeFromBehavior, randomBotOrderSize, randomizeQuantity, scoreTickerForSentiment } from './shared.js';
 
 const thresholds = {
     TECH: { buy: 5, sell: -5 },
@@ -12,6 +12,8 @@ const thresholds = {
     cyclical: 1.2,
 };
 
+const strategyBehavior = { passive: 0.2, aggressive: 0.8 };
+
 function onTick({ tickers, getDepth, sentimentByTicker }) {
     const candidates = tickers
         .map((ticker) => scoreTickerForSentiment({ sentimentByTicker, ticker, thresholds }))
@@ -21,8 +23,8 @@ function onTick({ tickers, getDepth, sentimentByTicker }) {
     const signal = candidates[0];
     if (!signal || signal.strength < 0.08) return [];
 
-    const quantity = randomizeQuantity(30 + signal.strength * 50, 5);
-    const type = chooseSentimentOrderType(signal, { strongSentimentThreshold: 9, strongStrengthThreshold: 4 });
+    const quantity = Math.max(randomBotOrderSize(), randomizeQuantity(30 + signal.strength * 50, 5));
+    const type = chooseOrderTypeFromBehavior(strategyBehavior);
     if (type === 'MARKET') {
         return [{ ticker: signal.ticker, side: signal.side, type, quantity, consumeSentiment: true }];
     }

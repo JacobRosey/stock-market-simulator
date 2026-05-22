@@ -1,4 +1,4 @@
-import { buildLimitPrice, chooseSentimentOrderType, getDepthInfo, getNewsTickers, randomChoice, randomInt, randomizeQuantity, scoreTickerForNews, scoreTickerForSentiment } from './shared.js';
+import { buildLimitPrice, chooseOrderTypeFromBehavior, getDepthInfo, getNewsTickers, randomBotOrderSize, randomChoice, randomInt, randomizeQuantity, scoreTickerForNews, scoreTickerForSentiment } from './shared.js';
 
 const thresholds = {
     TECH: { buy: 3, sell: -3 },
@@ -12,6 +12,8 @@ const thresholds = {
     cyclical: 1,
 };
 
+const strategyBehavior = { passive: 0.25, aggressive: 0.75 };
+
 function onNews({ news, getDepth }) {
     const candidates = getNewsTickers(news)
         .map((ticker) => scoreTickerForNews({ news, ticker, thresholds }))
@@ -20,8 +22,8 @@ function onNews({ news, getDepth }) {
         .slice(0, 2);
 
     return candidates.flatMap((signal) => {
-        const quantity = randomizeQuantity(3 + signal.strength * 10, 1);
-        const type = chooseSentimentOrderType(signal, { strongSentimentThreshold: 7, strongStrengthThreshold: 3 });
+        const quantity = Math.min(randomBotOrderSize(), randomizeQuantity(3 + signal.strength * 10, 1));
+        const type = chooseOrderTypeFromBehavior(strategyBehavior);
         console.log(`News junkie trading ${quantity} ${signal.ticker} in ${type} ${signal.side} based on headline: ${news.headline}`)
         if (type === 'MARKET') {
             return [{ ticker: signal.ticker, side: signal.side, type, quantity }];
@@ -41,8 +43,8 @@ function onTick({ tickers, getDepth, sentimentByTicker }) {
 
     const sentimentSignal = sentimentCandidates[0];
     if (sentimentSignal && Math.random() < 0.7) {
-        const quantity = randomizeQuantity(2 + sentimentSignal.strength * 8, 1);
-        const type = chooseSentimentOrderType(sentimentSignal, { strongSentimentThreshold: 7, strongStrengthThreshold: 3 });
+        const quantity = Math.min(randomBotOrderSize(), randomizeQuantity(2 + sentimentSignal.strength * 8, 1));
+        const type = chooseOrderTypeFromBehavior(strategyBehavior);
 
         if (type === 'MARKET') {
             return [{

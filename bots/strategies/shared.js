@@ -26,6 +26,14 @@ export function chooseOrderType(marketProbability = 0.3) {
     return Math.random() < marketProbability ? 'MARKET' : 'LIMIT';
 }
 
+export function chooseOrderTypeFromBehavior(behavior = {}) {
+    const aggressiveProbability = Number.isFinite(behavior.aggressive)
+        ? behavior.aggressive
+        : 1 - Number(behavior.passive ?? 0.7);
+
+    return chooseOrderType(clamp(aggressiveProbability, 0, 1));
+}
+
 export function chooseSentimentOrderType(signal, options = {}) {
     const {
         strongSentimentThreshold = 8,
@@ -218,4 +226,16 @@ export function buildTakerLimitPrice(getDepth, ticker, side) {
 export function randomizeQuantity(base, variance = 0) {
     if (variance <= 0) return Math.max(1, Math.round(base));
     return Math.max(1, Math.round(base + (Math.random() * 2 - 1) * variance));
+}
+
+export function randomOrderSize(min = 5, max = 25) {
+    return randomInt(min, max);
+}
+
+export function randomBotOrderSize() {
+    const r = Math.random();
+
+    if (r < 0.75) return randomOrderSize(1, 20);
+    if (r < 0.95) return randomOrderSize(20, 75);
+    return randomOrderSize(75, 200);
 }

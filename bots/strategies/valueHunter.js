@@ -3,7 +3,7 @@ import { buildTakerLimitPrice, chooseOrderType, getReferencePrice, randomizeQuan
 const MIN_VALUATION_BIAS = 0.04;
 const FULL_AGGRESSION_BIAS = 0.25;
 const MIN_MARKET_PROBABILITY = 0.05;
-const MAX_MARKET_PROBABILITY = 0.7;
+const MAX_MARKET_PROBABILITY = 0.2;
 
 function getAggression(absBias) {
     return Math.min(1, Math.max(0, (absBias - MIN_VALUATION_BIAS) / (
