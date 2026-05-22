@@ -498,10 +498,13 @@ app.get('/api/leaderboard', async (req, res) => {
     }
 });
 
-app.use(express.static(path.join(__dirname, 'dist')));
+const distPath = path.join(__dirname, 'dist');
 
-app.get(/^(?!\/api|\/auth).*/, (req, res) => {
-  res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+app.use('/assets', express.static(path.join(distPath, 'assets')));
+app.use(express.static(distPath));
+
+app.get(/^\/(?!api|auth|socket\.io|assets).*/, (req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'));
 });
 
 websocket.listen(PORT);
