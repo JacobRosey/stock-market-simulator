@@ -6,6 +6,8 @@ dotenv.config();
 
 const STARTING_CASH = 5_000_000.00;
 const HUMAN_STARTING_CASH = 50_000.00;
+const GUEST_USERNAME = 'guest';
+const GUEST_PASSWORD_HASH = '$2b$10$.CZVOmm3NE6RhOHcObuq3uGPP7SpizQlQGQuUGpSQJpKr6v/z9bIu';
 const MARKET_MAKER_USERNAME = 'bot_market_maker';
 const MARKET_MAKER_STARTING_ORDER_SIZE = 50;
 const MARKET_MAKER_STARTING_SPREAD = 0.25;
@@ -86,6 +88,34 @@ async function ensureBotUsers(connection) {
     }
 
     return createdBots;
+}
+
+async function ensureGuestUser(connection) {
+    const [existingUsers] = await connection.query(
+        'SELECT user_id FROM users WHERE username = ?',
+        [GUEST_USERNAME]
+    );
+
+    if (existingUsers.length === 0) {
+        await connection.query(
+            `INSERT INTO users (username, p_hash, cash, reserved_cash, deposited_cash)
+             VALUES (?, ?, 0.00, 0.00, 0.00)`,
+            [GUEST_USERNAME, GUEST_PASSWORD_HASH]
+        );
+
+        return true;
+    }
+
+    if (existingUsers.length > 1) {
+        throw new Error(`Expected at most one user for ${GUEST_USERNAME}, found ${existingUsers.length}.`);
+    }
+
+    await connection.query(
+        'UPDATE users SET p_hash = ? WHERE username = ?',
+        [GUEST_PASSWORD_HASH, GUEST_USERNAME]
+    );
+
+    return false;
 }
 
 function createDbConnection() {
@@ -257,6 +287,7 @@ export async function restartSeason() {
         await resetStockPrices(connection);
 
         const botsCreated = await ensureBotUsers(connection);
+        const guestCreated = await ensureGuestUser(connection);
 
         await resetHumanAccounts(connection);
 
@@ -269,6 +300,7 @@ export async function restartSeason() {
 
         return {
             botsCreated,
+            guestCreated,
             botsReset: BOT_USERNAMES.length,
             stocksReset: STARTING_STOCKS.length,
             marketMakerLiquidity,
@@ -291,6 +323,7 @@ if (isDirectRun) {
         .then((result) => {
             console.log('Season restart completed.');
             console.log(`Bots created: ${result.botsCreated}`);
+            console.log(`Guest created: ${result.guestCreated}`);
             console.log(`Bots reset: ${result.botsReset}`);
             console.log(`Stocks reset: ${result.stocksReset}`);
             console.log(`Market maker orders seeded: ${result.marketMakerLiquidity.ordersSeeded}`);

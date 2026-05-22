@@ -12,6 +12,7 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [guestLoading, setGuestLoading] = useState(false)
 
   const handleSubmit = async (e: React.SubmitEvent) => {
     e.preventDefault()
@@ -24,6 +25,19 @@ export default function Login() {
     } catch {
       setError('Invalid username or password')
       setLoading(false)
+    }
+  }
+
+  const handleGuestLogin = async () => {
+    setError('')
+    setGuestLoading(true)
+
+    try {
+      await login('guest', 'guest')
+      navigate('/')
+    } catch {
+      setError('Guest login is not available yet')
+      setGuestLoading(false)
     }
   }
 
@@ -54,8 +68,17 @@ export default function Login() {
           />
         </label>
 
-        <button type="submit" disabled={loading}>
+        <button type="submit" disabled={loading || guestLoading}>
           {loading ? 'Signing in...' : 'Login'}
+        </button>
+
+        <button
+          type="button"
+          className="secondary-auth-button"
+          disabled={loading || guestLoading}
+          onClick={handleGuestLogin}
+        >
+          {guestLoading ? 'Entering demo...' : 'Login as Guest'}
         </button>
         <div className="other-link">
           Don't have an account? <a href="/register">Sign up</a>

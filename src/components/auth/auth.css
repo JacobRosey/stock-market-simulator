@@ -120,6 +120,17 @@ body {
   background: #4f46e5;
 }
 
+.auth-card .secondary-auth-button {
+  width: 190px;
+  background: #0f172a;
+  border: 1px solid #475569;
+  color: #e2e8f0;
+}
+
+.auth-card .secondary-auth-button:hover {
+  background: #1e293b;
+}
+
 .auth-card button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
