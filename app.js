@@ -247,44 +247,50 @@ app.get('/api/stocks/:ticker/price-data', async (req, res) => {
         }
 
         let timeFilter;
-        let sampleInterval;
+        let bucketSeconds;
+        let maxPoints;
 
         switch (range) {
             case '1m':
                 timeFilter = "INTERVAL 1 MINUTE";
-                sampleInterval = 1;
+                bucketSeconds = 1;
+                maxPoints = 60;
                 break;
             case '5m':
                 timeFilter = "INTERVAL 5 MINUTE";
-                sampleInterval = 5;
+                bucketSeconds = 5;
+                maxPoints = 60;
                 break;
             case '1h':
                 timeFilter = "INTERVAL 1 HOUR";
-                sampleInterval = 60;
+                bucketSeconds = 60;
+                maxPoints = 60;
                 break;
             case '1d':
                 timeFilter = "INTERVAL 24 HOUR";
-                sampleInterval = 300;
+                bucketSeconds = 300;
+                maxPoints = 288;
                 break;
             case '1w':
                 timeFilter = "INTERVAL 7 DAY";
-                sampleInterval = 3600;
+                bucketSeconds = 3600;
+                maxPoints = 168;
                 break;
             default:
                 timeFilter = "INTERVAL 24 HOUR";
-                sampleInterval = 300;
+                bucketSeconds = 300;
+                maxPoints = 288;
         }
 
-        const [priceRows] = await db.query(`
+        const [inRangeRows] = await db.query(`
             SELECT
                 price,
                 timestamp
             FROM price_history
             WHERE stock_id = ?
             AND timestamp > NOW() - ${timeFilter}
-            AND UNIX_TIMESTAMP(timestamp) % ? = 0
             ORDER BY timestamp ASC
-        `, [stock.id, sampleInterval]);
+        `, [stock.id]);
 
         const [volumeRows] = await db.query(`
             SELECT COALESCE(SUM(filled), 0) as volume24h
@@ -293,20 +299,24 @@ app.get('/api/stocks/:ticker/price-data', async (req, res) => {
             AND timestamp > NOW() - INTERVAL 24 HOUR
         `, [stock.id]);
 
-        if (priceRows.length < 2) {
-            const [allRows] = await db.query(`
-                SELECT
-                    MIN(price) as low,
-                    MAX(price) as high,
-                    (SELECT price FROM price_history
-                     WHERE stock_id = ?
-                     ORDER BY timestamp DESC LIMIT 1) as current
-                FROM price_history
-                WHERE stock_id = ?
-                AND timestamp > NOW() - ${timeFilter}
-            `, [stock.id, stock.id]);
+        let sourceRows = inRangeRows;
+        if (sourceRows.length < 2) {
+            const [latestRows] = await db.query(`
+                SELECT price, timestamp
+                FROM (
+                    SELECT price, timestamp
+                    FROM price_history
+                    WHERE stock_id = ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                ) latest
+                ORDER BY timestamp ASC
+            `, [stock.id, maxPoints]);
+            sourceRows = latestRows;
+        }
 
-            const current = Number(allRows[0]?.current ?? stock.price ?? 0);
+        if (sourceRows.length === 0) {
+            const current = Number(stock.price ?? 0);
             const estimatedValue = marketServices.estimatedValueByTicker.get(ticker)
                 ?? marketServices.createEstimatedValueRange(current, marketServices.getCompanyProfile(ticker)?.archetype);
 
@@ -316,14 +326,27 @@ app.get('/api/stocks/:ticker/price-data', async (req, res) => {
                 current,
                 estimatedValue,
                 volume24h: Number(volumeRows[0]?.volume24h ?? 0),
-                high: Number(allRows[0]?.high ?? current),
-                low: Number(allRows[0]?.low ?? current),
+                high: current,
+                low: current,
                 chart: []
             });
         }
 
-        const prices = priceRows.map(p => Number(p.price));
-        const current = Number(priceRows[priceRows.length - 1]?.price ?? stock.price ?? 0);
+        const bucketMs = bucketSeconds * 1000;
+        const bucketedRowsByTime = new Map();
+        for (const row of sourceRows) {
+            const timestampMs = new Date(row.timestamp).getTime();
+            if (!Number.isFinite(timestampMs)) continue;
+            bucketedRowsByTime.set(Math.floor(timestampMs / bucketMs), row);
+        }
+
+        let priceRows = [...bucketedRowsByTime.values()];
+        if (priceRows.length < 2 && sourceRows.length >= 2) {
+            priceRows = sourceRows.slice(-maxPoints);
+        }
+
+        const prices = sourceRows.map(p => Number(p.price)).filter(Number.isFinite);
+        const current = Number(sourceRows[sourceRows.length - 1]?.price ?? stock.price ?? 0);
         const estimatedValue = marketServices.estimatedValueByTicker.get(ticker)
             ?? marketServices.createEstimatedValueRange(current, marketServices.getCompanyProfile(ticker)?.archetype);
 
@@ -333,8 +356,8 @@ app.get('/api/stocks/:ticker/price-data', async (req, res) => {
             current,
             estimatedValue,
             volume24h: Number(volumeRows[0]?.volume24h ?? 0),
-            high: Math.max(...prices),
-            low: Math.min(...prices),
+            high: prices.length > 0 ? Math.max(...prices) : current,
+            low: prices.length > 0 ? Math.min(...prices) : current,
             chart: priceRows.map(row => ({
                 price: Number(row.price),
                 timestamp: row.timestamp

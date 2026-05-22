@@ -110,28 +110,37 @@ export default function Chart({ ticker }: ChartProps) {
   });
 
   const [loading, setLoading] = useState(true);
+  // Ref to always have the latest price without causing useEffect re-renders
+  const latestPriceRef = useRef<number | null>(null);
 
   useEffect(() => {
+    let isCurrentRequest = true;
+
     setLoading(true);
+    latestPriceRef.current = null;
 
     fetchPriceHistory(ticker, range).then(data => {
-      setHistory(data.chart);
+      if (!isCurrentRequest) return;
+
+      const chart = Array.isArray(data?.chart) ? data.chart : [];
+      setHistory(chart);
       volumeDeltaBaselineRef.current = volume24hByTicker[ticker] ?? 0;
       setStats({
-        name: data.name,
-        description: data.description,
-        current: data.current,
+        name: data?.name ?? ticker,
+        description: data?.description ?? '',
+        current: Number(data?.current ?? 0),
         estimatedValue: data.estimatedValue ?? null,
         volume24h: data.volume24h ?? 0,
-        high: data.high,
-        low: data.low,
+        high: Number(data?.high ?? 0),
+        low: Number(data?.low ?? 0),
       });
       setLoading(false);
     });
-  }, [ticker, range]);
 
-  // Ref to always have the latest price without causing useEffect re-renders
-  const latestPriceRef = useRef<number | null>(null);
+    return () => {
+      isCurrentRequest = false;
+    };
+  }, [ticker, range]);
 
   // Update the ref whenever a new websocket price arrives
   useEffect(() => {

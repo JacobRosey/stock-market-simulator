@@ -22,15 +22,30 @@ export const fetchStocks = async (): Promise<StocksResponse> => {
 };
 export const fetchPriceHistory = async (ticker: string, range = '1d') => {
     try {
-        const response = await fetch(`${API_BASE}/stocks/${ticker}/price-data?range=${range}`);
+        const response = await fetch(`${API_BASE}/stocks/${encodeURIComponent(ticker)}/price-data?range=${encodeURIComponent(range)}`);
         if (!response.ok) {
-            console.error(`Response not OK in fetchPriceHistory: `, response)
+            throw new Error(`HTTP error! status: ${response.status}`);
         }
-        return response.json()
+
+        const text = await response.text();
+        if (!text) {
+            throw new Error('Empty price history response');
+        }
+
+        return JSON.parse(text);
     }
     catch (error) {
         console.error(`Error in fetchPriceHistory: `, error)
-        return []
+        return {
+            name: ticker,
+            description: '',
+            current: 0,
+            estimatedValue: null,
+            volume24h: 0,
+            high: 0,
+            low: 0,
+            chart: []
+        };
     }
 };
 
