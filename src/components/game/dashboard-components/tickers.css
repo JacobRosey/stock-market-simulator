@@ -14,6 +14,18 @@
   font-size: .75rem;
 }
 
+.ticker-selector.global-impact-positive {
+  border-color: rgba(34, 197, 94, 0.75);
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.2), 0 0 18px rgba(34, 197, 94, 0.22);
+  animation: global-impact-pulse-positive 1.5s ease-out;
+}
+
+.ticker-selector.global-impact-negative {
+  border-color: rgba(248, 113, 113, 0.75);
+  box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.2), 0 0 18px rgba(248, 113, 113, 0.22);
+  animation: global-impact-pulse-negative 1.5s ease-out;
+}
+
 .ticker-selector button {
   padding: 0.5rem;
   background: #1e293b;
@@ -44,6 +56,28 @@
   border-color: #6366f1;
 }
 
+.ticker-selector button.news-impact-positive {
+  border-color: rgba(34, 197, 94, 0.85);
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.18), 0 0 12px rgba(34, 197, 94, 0.28);
+  animation: ticker-impact-pulse-positive 1.35s ease-out;
+}
+
+.ticker-selector button.news-impact-negative {
+  border-color: rgba(248, 113, 113, 0.9);
+  box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.18), 0 0 12px rgba(248, 113, 113, 0.28);
+  animation: ticker-impact-pulse-negative 1.35s ease-out;
+}
+
+.ticker-selector button.active.news-impact-positive {
+  border-color: rgba(74, 222, 128, 0.95);
+  box-shadow: 0 0 0 1px rgba(74, 222, 128, 0.22), 0 0 14px rgba(34, 197, 94, 0.34);
+}
+
+.ticker-selector button.active.news-impact-negative {
+  border-color: rgba(252, 165, 165, 0.95);
+  box-shadow: 0 0 0 1px rgba(252, 165, 165, 0.22), 0 0 14px rgba(248, 113, 113, 0.34);
+}
+
 .sector-group {
   display: flex;
   flex-direction: column;
@@ -53,4 +87,50 @@
   font-size: 1.15rem;
   margin-top: -.5rem;
   color:#655df2;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0.25rem;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.sector-group.sector-impact-positive {
+  border-color: rgba(34, 197, 94, 0.7);
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.14), 0 0 16px rgba(34, 197, 94, 0.2);
+  animation: sector-impact-pulse-positive 1.45s ease-out;
+}
+
+.sector-group.sector-impact-negative {
+  border-color: rgba(248, 113, 113, 0.75);
+  box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.14), 0 0 16px rgba(248, 113, 113, 0.2);
+  animation: sector-impact-pulse-negative 1.45s ease-out;
+}
+
+@keyframes ticker-impact-pulse-positive {
+  0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.34), 0 0 0 rgba(34, 197, 94, 0); }
+  100% { box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.18), 0 0 12px rgba(34, 197, 94, 0.28); }
+}
+
+@keyframes ticker-impact-pulse-negative {
+  0% { box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.36), 0 0 0 rgba(248, 113, 113, 0); }
+  100% { box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.18), 0 0 12px rgba(248, 113, 113, 0.28); }
+}
+
+@keyframes sector-impact-pulse-positive {
+  0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.28), 0 0 0 rgba(34, 197, 94, 0); }
+  100% { box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.14), 0 0 16px rgba(34, 197, 94, 0.2); }
+}
+
+@keyframes sector-impact-pulse-negative {
+  0% { box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.3), 0 0 0 rgba(248, 113, 113, 0); }
+  100% { box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.14), 0 0 16px rgba(248, 113, 113, 0.2); }
+}
+
+@keyframes global-impact-pulse-positive {
+  0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.32), 0 0 0 rgba(34, 197, 94, 0); }
+  100% { box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.2), 0 0 18px rgba(34, 197, 94, 0.22); }
+}
+
+@keyframes global-impact-pulse-negative {
+  0% { box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.34), 0 0 0 rgba(248, 113, 113, 0); }
+  100% { box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.2), 0 0 18px rgba(248, 113, 113, 0.22); }
 }

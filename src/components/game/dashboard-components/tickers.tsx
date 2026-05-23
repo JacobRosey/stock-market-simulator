@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { type Stock, type Ticker } from '../../../types'
 import { fetchStocks } from '../../../api'
+import { useWebSocket } from '../../../context/WebSocketContext';
 import './tickers.css'
 
 interface GroupedStocks {
@@ -14,6 +15,23 @@ interface TickerSelectorProps {
 
 export default function TickerSelector({ selectedTicker, onSelectTicker }: TickerSelectorProps) {
     const [groupedBySector, setGroupedBySector] = useState<GroupedStocks>({});
+    const { latestNews } = useWebSocket();
+
+    const newsImpact = useMemo(() => {
+        const direction = (latestNews?.sentiment ?? 0) > 0
+            ? 'positive'
+            : (latestNews?.sentiment ?? 0) < 0
+                ? 'negative'
+                : null;
+
+        return {
+            direction,
+            affectedTickers: new Set(latestNews?.affectedTickers ?? []),
+            affectedSectors: new Set<string>(latestNews?.affectedSectors ?? []),
+            isGlobal: Boolean(latestNews?.global && direction),
+            timestamp: latestNews?.timestamp ?? 'idle',
+        };
+    }, [latestNews]);
 
     useEffect(() => {
         fetchStocks().then((data: Stock[]) => {
@@ -29,21 +47,43 @@ export default function TickerSelector({ selectedTicker, onSelectTicker }: Ticke
         });
     }, []);
 
+    const selectorClasses = [
+        'ticker-selector',
+        newsImpact.isGlobal && newsImpact.direction ? `global-impact-${newsImpact.direction}` : '',
+    ].filter(Boolean).join(' ');
+
     return (
-    <div className="ticker-selector">
+    <div key={newsImpact.timestamp} className={selectorClasses}>
         {Object.entries(groupedBySector).map(([sector, stocks]) => (
-            <div key={sector} className="sector-group">
+            <div
+                key={sector}
+                className={[
+                    'sector-group',
+                    !newsImpact.isGlobal && newsImpact.direction && newsImpact.affectedSectors.has(sector)
+                        ? `sector-impact-${newsImpact.direction}`
+                        : '',
+                ].filter(Boolean).join(' ')}
+            >
                 <h4 className="sector-title">{sector}</h4>
                 <div className="sector-buttons">
-                    {stocks.map((stock) => (
-                        <button
-                            key={stock.ticker}
-                            onClick={() => onSelectTicker(stock.ticker)}
-                            className={selectedTicker === stock.ticker ? 'active' : ''}
-                        >
-                            {stock.ticker}
-                        </button>
-                    ))}
+                    {stocks.map((stock) => {
+                        const tickerImpactClass = newsImpact.direction && newsImpact.affectedTickers.has(stock.ticker)
+                            ? `news-impact-${newsImpact.direction}`
+                            : '';
+
+                        return (
+                            <button
+                                key={stock.ticker}
+                                onClick={() => onSelectTicker(stock.ticker)}
+                                className={[
+                                    selectedTicker === stock.ticker ? 'active' : '',
+                                    tickerImpactClass,
+                                ].filter(Boolean).join(' ')}
+                            >
+                                {stock.ticker}
+                            </button>
+                        );
+                    })}
                 </div>
             </div>
         ))}
