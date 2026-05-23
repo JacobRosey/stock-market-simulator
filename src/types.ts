@@ -133,6 +133,7 @@ export interface Holding {
 
 export interface Portfolio {
     cash: number;
+    depositedCash: number;
     positions: Position[];
 }
 

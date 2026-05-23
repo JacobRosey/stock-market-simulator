@@ -447,6 +447,7 @@ app.get('/api/portfolio', async (req, res) => {
         const [rows] = await db.query(`
             SELECT
                 u.cash,
+                u.deposited_cash,
                 p.ticker,
                 p.shares,
                 p.total_cost,
@@ -466,16 +467,18 @@ app.get('/api/portfolio', async (req, res) => {
 
         if (rows.length === 0) {
             const [userRows] = await db.query(
-                'SELECT cash FROM users WHERE user_id = ?',
+                'SELECT cash, deposited_cash FROM users WHERE user_id = ?',
                 [userId]
             );
             return res.json({
-                cash: userRows[0].cash,
+                cash: parseFloat(userRows[0].cash),
+                depositedCash: parseFloat(userRows[0].deposited_cash),
                 positions: []
             });
         }
 
         const cash = rows[0].cash;
+        const depositedCash = rows[0].deposited_cash;
         const positions = rows
             .filter(row => row.ticker !== null)
             .map(row => {
@@ -500,6 +503,7 @@ app.get('/api/portfolio', async (req, res) => {
 
         res.json({
             cash: parseFloat(cash),
+            depositedCash: parseFloat(depositedCash),
             positions
         });
     } catch (error) {

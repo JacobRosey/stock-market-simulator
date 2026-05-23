@@ -11,14 +11,17 @@ export default function Portfolio() {
 
     const positions = portfolio?.positions ?? [];
     const cash = portfolio?.cash ?? 0;
+    const depositedCash = portfolio?.depositedCash ?? 0;
 
   const handleLogout = async () => {
     await logout()
   }
 
   const totalValue = cash + positions.reduce((sum, pos) => sum + pos.currentValue, 0)
-  const totalGainLoss = positions.reduce((sum, pos) => sum + pos.gainLoss, 0)
-  const totalGainLossPercent = totalValue > 0 ? (totalGainLoss / (totalValue - totalGainLoss)) * 100 : 0
+  const fallbackBasis = cash + positions.reduce((sum, pos) => sum + pos.totalCost, 0)
+  const totalBasis = depositedCash > 0 ? depositedCash : fallbackBasis
+  const totalGainLoss = totalValue - totalBasis
+  const totalGainLossPercent = totalBasis > 0 ? (totalGainLoss / totalBasis) * 100 : 0
 
   if (portfolioLoading) {
     return (

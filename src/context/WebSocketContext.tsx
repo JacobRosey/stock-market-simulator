@@ -181,6 +181,7 @@ export const WebSocketProvider = () => {
         return {
             ...prev,
             cash: prev.cash + update.cashDelta,
+            depositedCash: prev.depositedCash + (update.depositedCashDelta ?? 0),
             positions: updatedPositions,
         };
     }
