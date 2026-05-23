@@ -73,12 +73,16 @@ export default function TickerSelector({ selectedTicker, onSelectTicker }: Ticke
             return;
         }
 
-        for (const sector of latestNews.affectedSectors ?? []) {
-            applyImpactClass(sectorRefs.current.get(sector), `sector-impact-${direction}`);
+        const affectedTickers = latestNews.affectedTickers ?? [];
+
+        for (const ticker of affectedTickers) {
+            applyImpactClass(tickerRefs.current.get(ticker), `news-impact-${direction}`);
         }
 
-        for (const ticker of latestNews.affectedTickers ?? []) {
-            applyImpactClass(tickerRefs.current.get(ticker), `news-impact-${direction}`);
+        if (affectedTickers.length > 0) return;
+
+        for (const sector of latestNews.affectedSectors ?? []) {
+            applyImpactClass(sectorRefs.current.get(sector), `sector-impact-${direction}`);
         }
 
         return () => {
