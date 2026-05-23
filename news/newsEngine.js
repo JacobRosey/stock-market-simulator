@@ -160,3 +160,7 @@ export function startNewsGenerator(io, options = {}) {
         stop: () => clearInterval(timer),
     };
 }
+
+export function stopNewsGenerator(generator) {
+    generator?.stop?.();
+}

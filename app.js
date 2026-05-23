@@ -5,7 +5,7 @@ import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
-import { startNewsGenerator } from './news/newsEngine.js';
+import { startNewsGenerator, stopNewsGenerator } from './news/newsEngine.js';
 import { createBotManager } from './bots/BotManager.js';
 import { createWebsocketServer } from './websocket.js';
 import { createRedisLayer } from './redis.js';
@@ -80,6 +80,41 @@ const db = mysql.createPool({
 
 const marketServices = createMarketServices({ db });
 let latestGeneratedNews = null;
+let newsGenerator = null;
+
+function handleNewsPayload(payload) {
+    latestGeneratedNews = payload;
+    const estimatedValueUpdates = marketServices.updateEstimatedValuesForNews(payload);
+    if (Object.keys(estimatedValueUpdates).length > 0) {
+        websocket.io.emit('ESTIMATED_VALUE_UPDATE', estimatedValueUpdates);
+    }
+    void marketServices.applyStimulusCashForNews(payload).catch(error => {
+        console.error('Failed to apply stimulus cash:', error);
+    });
+    void marketServices.getBotManager()?.onNews(payload);
+}
+
+function syncBackgroundActivity() {
+    marketServices.getBotManager()?.syncActivityWithUsers();
+
+    if (websocket.userToSocket.size > 0) {
+        if (!newsGenerator) {
+            newsGenerator = startNewsGenerator(websocket.io, {
+                intervalMs: 30_000,
+                emitOnStart: true,
+                onEmit: handleNewsPayload
+            });
+            console.log('Started news generator; users connected.');
+        }
+        return;
+    }
+
+    if (newsGenerator) {
+        stopNewsGenerator(newsGenerator);
+        newsGenerator = null;
+        console.log('Stopped news generator; no users connected.');
+    }
+}
 
 const websocket = createWebsocketServer(app, {
     corsOptions,
@@ -90,9 +125,7 @@ const websocket = createWebsocketServer(app, {
     getDepth: marketServices.getDepth,
     verifyOrderOwnership: marketServices.verifyOrderOwnership,
     publishCancelOrder: marketServices.publishCancelOrder,
-    onUserConnectionsChanged: () => {
-        marketServices.getBotManager()?.syncActivityWithUsers();
-    }
+    onUserConnectionsChanged: syncBackgroundActivity
 });
 
 marketServices.setIo(websocket.io);
@@ -569,19 +602,4 @@ const botManager = createBotManager({
 marketServices.setBotManager(botManager);
 await botManager.start();
 marketServices.startLeaderboardBroadcasts();
-
-startNewsGenerator(websocket.io, {
-    intervalMs: 30_000,
-    emitOnStart: true,
-    onEmit: (payload) => {
-        latestGeneratedNews = payload;
-        const estimatedValueUpdates = marketServices.updateEstimatedValuesForNews(payload);
-        if (Object.keys(estimatedValueUpdates).length > 0) {
-            websocket.io.emit('ESTIMATED_VALUE_UPDATE', estimatedValueUpdates);
-        }
-        void marketServices.applyStimulusCashForNews(payload).catch(error => {
-            console.error('Failed to apply stimulus cash:', error);
-        });
-        void botManager?.onNews(payload);
-    }
-});
+syncBackgroundActivity();

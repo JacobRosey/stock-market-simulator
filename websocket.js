@@ -55,7 +55,6 @@ export function createWebsocketServer(app, {
             userToSocket.set(userId, socket);
             socketToUser.set(socket.id, userId);
             console.log(`User ${socketToUser.get(socket.id)} registered with socket ${userToSocket.get(userId).id}`);
-            notifyUserConnectionsChanged();
 
             const latestGeneratedNews = getLatestGeneratedNews();
             if (latestGeneratedNews) {
@@ -70,6 +69,8 @@ export function createWebsocketServer(app, {
             } else {
                 void broadcastLeaderboardUpdate();
             }
+
+            notifyUserConnectionsChanged();
         });
 
         socket.on('subscribe', (ticker) => {
