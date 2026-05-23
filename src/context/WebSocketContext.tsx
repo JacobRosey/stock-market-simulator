@@ -16,6 +16,7 @@ import type {
     OrderRejectionUpdate,
     ToastMessage,
     LeaderboardEntry,
+    LeaderboardUpdate,
     EstimatedValueRange,
     VolumeUpdate,
 } from '../types';
@@ -357,8 +358,23 @@ export const WebSocketProvider = () => {
             setLastMessageAt(Date.now());
         });
 
-        newSocket.on('LEADERBOARD_UPDATE', (data: LeaderboardEntry[] | { rankings: LeaderboardEntry[] }) => {
+        newSocket.on('LEADERBOARD_UPDATE', (data: LeaderboardEntry[] | LeaderboardUpdate) => {
             const rankings = Array.isArray(data) ? data : data.rankings;
+            const nextPrices = Array.isArray(data) ? undefined : data.prices;
+
+            if (nextPrices) {
+                setPrices(prev => {
+                    const updatedPrices = {
+                        ...prev,
+                        ...nextPrices,
+                    };
+                    pricesRef.current = updatedPrices;
+                    return updatedPrices;
+                });
+
+                setPortfolio(prev => prev ? applyPortfolioPrices(prev, nextPrices) : prev);
+            }
+
             setLeaderboard(rankings ?? []);
             setLastMessageAt(Date.now());
         });

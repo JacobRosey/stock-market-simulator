@@ -171,6 +171,11 @@ export interface LeaderboardEntry {
     value?: number; // Optional absolute value for sorting
 }
 
+export interface LeaderboardUpdate {
+    rankings: LeaderboardEntry[];
+    prices?: Partial<Record<Ticker, number>>;
+}
+
 // ===== BOT TYPES =====
 export type BotStrategy = 'value' | 'momentum' | 'contrarian' | 'marketMaker' | 'boomer';
 

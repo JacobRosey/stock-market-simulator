@@ -87,6 +87,14 @@ export function createMarketServices({ db }) {
         return depthCache.get(ticker);
     }
 
+    function getMarketPrices() {
+        return Object.fromEntries(
+            [...depthCache.entries()]
+                .map(([ticker, depth]) => [ticker, Number(depth?.lastPrice ?? 0)])
+                .filter(([, price]) => Number.isFinite(price) && price > 0)
+        );
+    }
+
     function roundMoney(value) {
         return Number(Number(value).toFixed(2));
     }
@@ -316,7 +324,10 @@ export function createMarketServices({ db }) {
 
         try {
             latestLeaderboard = await buildLeaderboard();
-            io?.emit('LEADERBOARD_UPDATE', latestLeaderboard);
+            io?.emit('LEADERBOARD_UPDATE', {
+                rankings: latestLeaderboard,
+                prices: getMarketPrices(),
+            });
         } catch (error) {
             console.error('Failed to broadcast leaderboard update:', error);
         } finally {
@@ -1165,6 +1176,7 @@ export function createMarketServices({ db }) {
         getLatestLeaderboard,
         getEstimatedValueEntries,
         getDepth,
+        getMarketPrices,
         getPortfolioCurrentPrice,
         getCompanyProfile,
         createEstimatedValueRange,

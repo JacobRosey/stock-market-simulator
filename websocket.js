@@ -6,6 +6,7 @@ export function createWebsocketServer(app, {
     getEstimatedValueEntries,
     getLatestGeneratedNews,
     getLatestLeaderboard,
+    getMarketPrices,
     broadcastLeaderboardUpdate,
     getDepth,
     verifyOrderOwnership,
@@ -65,7 +66,10 @@ export function createWebsocketServer(app, {
 
             const latestLeaderboard = getLatestLeaderboard();
             if (latestLeaderboard.length > 0) {
-                socket.emit('LEADERBOARD_UPDATE', latestLeaderboard);
+                socket.emit('LEADERBOARD_UPDATE', {
+                    rankings: latestLeaderboard,
+                    prices: getMarketPrices(),
+                });
             } else {
                 void broadcastLeaderboardUpdate();
             }

@@ -121,6 +121,7 @@ const websocket = createWebsocketServer(app, {
     getEstimatedValueEntries: marketServices.getEstimatedValueEntries,
     getLatestGeneratedNews: () => latestGeneratedNews,
     getLatestLeaderboard: marketServices.getLatestLeaderboard,
+    getMarketPrices: marketServices.getMarketPrices,
     broadcastLeaderboardUpdate: marketServices.broadcastLeaderboardUpdate,
     getDepth: marketServices.getDepth,
     verifyOrderOwnership: marketServices.verifyOrderOwnership,
