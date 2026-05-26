@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 
 dotenv.config();
 
-const STARTING_CASH = 5_000_000.00;
+const BOT_STARTING_ACCOUNT_VALUE = 6_855_000.00;
 const HUMAN_STARTING_CASH = 50_000.00;
 const GUEST_USERNAME = 'guest';
 const GUEST_PASSWORD_HASH = '$2b$10$.CZVOmm3NE6RhOHcObuq3uGPP7SpizQlQGQuUGpSQJpKr6v/z9bIu';
@@ -47,14 +47,155 @@ const STARTING_STOCKS = [
     { ticker: 'NEURO', price: 95.00 },
 ];
 
-const BOT_PORTFOLIO_ROWS = STARTING_STOCKS.map(({ ticker, price }) => ({
-    ticker,
-    shares: 1000,
-    totalCost: price * 1000,
-}));
+const BOT_STARTING_PORTFOLIOS = {
+    bot_market_maker: {
+        cashShare: 0.35,
+        weights: {
+            NEXUS: 0.08,
+            QCI: 0.035,
+            CLSE: 0.045,
+            NSMC: 0.04,
+            AGB: 0.075,
+            CRC: 0.035,
+            SGI: 0.045,
+            FINT: 0.035,
+            MEGA: 0.075,
+            TREND: 0.035,
+            GLG: 0.045,
+            CLICK: 0.035,
+            IDYN: 0.075,
+            AUTO: 0.04,
+            AERO: 0.075,
+            GSYS: 0.035,
+            GMED: 0.075,
+            BIOV: 0.035,
+            GENH: 0.05,
+            NEURO: 0.035,
+        },
+    },
+    bot_contrarian: {
+        cashShare: 0.40,
+        weights: {
+            BIOV: 0.16,
+            QCI: 0.13,
+            CRC: 0.12,
+            TREND: 0.10,
+            AUTO: 0.09,
+            NSMC: 0.09,
+            AGB: 0.08,
+            GMED: 0.08,
+            MEGA: 0.07,
+            FINT: 0.04,
+            GSYS: 0.04,
+        },
+    },
+    bot_whale: {
+        cashShare: 0.75,
+        weights: {
+            NEXUS: 0.24,
+            AGB: 0.18,
+            GMED: 0.18,
+            AERO: 0.14,
+            MEGA: 0.12,
+            QCI: 0.05,
+            BIOV: 0.05,
+            FINT: 0.04,
+        },
+    },
+    bot_news_junkie: {
+        cashShare: 0.30,
+        weights: {
+            QCI: 0.12,
+            FINT: 0.11,
+            TREND: 0.10,
+            CLICK: 0.10,
+            GSYS: 0.10,
+            BIOV: 0.12,
+            NEURO: 0.10,
+            NSMC: 0.08,
+            AUTO: 0.07,
+            NEXUS: 0.04,
+            GMED: 0.03,
+            MEGA: 0.03,
+        },
+    },
+    bot_trend_rider: {
+        cashShare: 0.25,
+        weights: {
+            QCI: 0.14,
+            FINT: 0.13,
+            CLICK: 0.12,
+            TREND: 0.12,
+            GSYS: 0.11,
+            BIOV: 0.14,
+            NEURO: 0.10,
+            NSMC: 0.08,
+            AUTO: 0.06,
+        },
+    },
+    bot_value_hunter: {
+        cashShare: 0.50,
+        weights: {
+            AGB: 0.16,
+            SGI: 0.14,
+            GMED: 0.16,
+            GENH: 0.10,
+            IDYN: 0.13,
+            AERO: 0.13,
+            CLSE: 0.10,
+            GLG: 0.08,
+        },
+    },
+    bot_noise_trader: {
+        cashShare: 0.20,
+        weights: {
+            BIOV: 0.17,
+            MEGA: 0.04,
+            QCI: 0.13,
+            GENH: 0.05,
+            CLICK: 0.11,
+            AERO: 0.03,
+            CRC: 0.09,
+            CLSE: 0.06,
+            TREND: 0.10,
+            GMED: 0.04,
+            NSMC: 0.07,
+            FINT: 0.08,
+            GLG: 0.03,
+        },
+    },
+    bot_skeptic: {
+        cashShare: 0.45,
+        weights: {
+            AGB: 0.17,
+            SGI: 0.15,
+            MEGA: 0.14,
+            AERO: 0.15,
+            GMED: 0.17,
+            GENH: 0.10,
+            IDYN: 0.12,
+        },
+    },
+    bot_optimist: {
+        cashShare: 0.20,
+        weights: {
+            QCI: 0.15,
+            FINT: 0.14,
+            CLICK: 0.13,
+            GSYS: 0.13,
+            BIOV: 0.16,
+            NEURO: 0.12,
+            TREND: 0.10,
+            NEXUS: 0.03,
+            CLSE: 0.02,
+            GLG: 0.02,
+        },
+    },
+};
 
-const TOTAL_STARTING_POSITION_COST = BOT_PORTFOLIO_ROWS.reduce((total, row) => total + row.totalCost, 0);
-const STARTING_DEPOSITED_CASH = STARTING_CASH + TOTAL_STARTING_POSITION_COST;
+const STARTING_STOCK_PRICE_BY_TICKER = new Map(
+    STARTING_STOCKS.map(({ ticker, price }) => [ticker, price])
+);
 
 function roundPrice(price) {
     return Math.max(0.01, Math.round(price * 100) / 100);
@@ -63,6 +204,76 @@ function roundPrice(price) {
 function roundMoney(amount) {
     return Math.round(amount * 100) / 100;
 }
+
+function assertPortfolioConfig(username, profile) {
+    if (!profile) {
+        throw new Error(`Missing starting portfolio config for ${username}.`);
+    }
+
+    const cashShare = Number(profile.cashShare);
+    if (!Number.isFinite(cashShare) || cashShare < 0 || cashShare >= 1) {
+        throw new Error(`Invalid cash share for ${username}: ${profile.cashShare}.`);
+    }
+
+    const weightTotal = Object.values(profile.weights ?? {})
+        .reduce((total, weight) => total + Number(weight), 0);
+    if (Math.abs(weightTotal - 1) > 0.000001) {
+        throw new Error(`Starting portfolio weights for ${username} must total 1. Found ${weightTotal}.`);
+    }
+
+    for (const ticker of Object.keys(profile.weights ?? {})) {
+        if (!STARTING_STOCK_PRICE_BY_TICKER.has(ticker)) {
+            throw new Error(`Starting portfolio for ${username} references unknown ticker ${ticker}.`);
+        }
+    }
+}
+
+function buildBotStartingPortfolio(username) {
+    const profile = BOT_STARTING_PORTFOLIOS[username];
+    assertPortfolioConfig(username, profile);
+
+    const targetStockValue = BOT_STARTING_ACCOUNT_VALUE * (1 - profile.cashShare);
+    const rows = Object.entries(profile.weights)
+        .map(([ticker, weight]) => {
+            const price = STARTING_STOCK_PRICE_BY_TICKER.get(ticker);
+            const targetValue = targetStockValue * weight;
+            const shares = Math.floor(targetValue / price);
+
+            return {
+                ticker,
+                shares,
+                totalCost: roundMoney(shares * price),
+            };
+        })
+        .filter(({ shares }) => shares > 0);
+
+    const stockValue = rows.reduce((total, row) => total + row.totalCost, 0);
+    const cash = roundMoney(BOT_STARTING_ACCOUNT_VALUE - stockValue);
+
+    return { cash, rows };
+}
+
+function validateBotStartingPortfolios() {
+    for (const username of BOT_USERNAMES) {
+        buildBotStartingPortfolio(username);
+    }
+
+    const marketMakerPortfolio = buildBotStartingPortfolio(MARKET_MAKER_USERNAME);
+    const marketMakerRowsByTicker = new Map(
+        marketMakerPortfolio.rows.map(({ ticker, shares }) => [ticker, shares])
+    );
+    const underfundedTickers = STARTING_STOCKS
+        .filter(({ ticker }) => (
+            (marketMakerRowsByTicker.get(ticker) ?? 0) < MARKET_MAKER_STARTING_ORDER_SIZE
+        ))
+        .map(({ ticker }) => ticker);
+
+    if (underfundedTickers.length > 0) {
+        throw new Error(`Market maker needs at least ${MARKET_MAKER_STARTING_ORDER_SIZE} shares for: ${underfundedTickers.join(', ')}.`);
+    }
+}
+
+validateBotStartingPortfolios();
 
 async function ensureBotUsers(connection) {
     const botPasswordHash = '$2b$10$VJ3zD8n9xlEMvE4y.z4Vlu.NFjWqz7F5gqRZkNQY2ksPJ4p5z7X0e';
@@ -139,15 +350,16 @@ async function resetBotPortfolio(connection, username) {
     }
 
     const userId = users[0].user_id;
+    const startingPortfolio = buildBotStartingPortfolio(username);
 
     await connection.query(
         `UPDATE users
          SET cash = ?, reserved_cash = 0.00, deposited_cash = ?
          WHERE user_id = ?`,
-        [STARTING_CASH, STARTING_DEPOSITED_CASH, userId]
+        [startingPortfolio.cash, BOT_STARTING_ACCOUNT_VALUE, userId]
     );
 
-    const portfolioRows = BOT_PORTFOLIO_ROWS.map(({ ticker, shares, totalCost }) => [
+    const portfolioRows = startingPortfolio.rows.map(({ ticker, shares, totalCost }) => [
         userId,
         ticker,
         shares,
@@ -274,15 +486,19 @@ async function resetHumanAccounts(connection) {
     );
 }
 
+async function wipeSeasonActivity(connection) {
+    await connection.query('DELETE FROM orders');
+    await connection.query('DELETE FROM price_history');
+    await connection.query('DELETE FROM portfolio');
+}
+
 export async function restartSeason() {
     const connection = await createDbConnection();
 
     try {
         await connection.beginTransaction();
 
-        await connection.query('DELETE FROM orders');
-        await connection.query('DELETE FROM price_history');
-        await connection.query('DELETE FROM portfolio');
+        await wipeSeasonActivity(connection);
 
         await resetStockPrices(connection);
 
@@ -304,9 +520,8 @@ export async function restartSeason() {
             botsReset: BOT_USERNAMES.length,
             stocksReset: STARTING_STOCKS.length,
             marketMakerLiquidity,
-            startingCash: STARTING_CASH,
+            botStartingAccountValue: BOT_STARTING_ACCOUNT_VALUE,
             humanStartingCash: HUMAN_STARTING_CASH,
-            startingDepositedCash: STARTING_DEPOSITED_CASH,
         };
     } catch (error) {
         await connection.rollback();
@@ -328,9 +543,8 @@ if (isDirectRun) {
             console.log(`Stocks reset: ${result.stocksReset}`);
             console.log(`Market maker orders seeded: ${result.marketMakerLiquidity.ordersSeeded}`);
             console.log(`Market maker reserved cash: ${result.marketMakerLiquidity.reservedCash.toFixed(2)}`);
-            console.log(`Starting cash: ${result.startingCash.toFixed(2)}`);
+            console.log(`Bot starting account value: ${result.botStartingAccountValue.toFixed(2)}`);
             console.log(`Human starting cash: ${result.humanStartingCash.toFixed(2)}`);
-            console.log(`Deposited cash: ${result.startingDepositedCash.toFixed(2)}`);
         })
         .catch((error) => {
             console.error('Season restart failed.');

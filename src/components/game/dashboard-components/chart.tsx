@@ -72,7 +72,7 @@ export default function Chart({ ticker }: ChartProps) {
   const [history, setHistory] = useState<PricePoint[]>([]);
   const [showInfo, setShowInfo] = useState(false);
   const [range, setRange] = useState('1m');
-  const ranges = ['1m', '5m', '1h', '1d', '1w'];
+  const ranges = ['1m', '5m', '1h', '1d'];
   const volumeDeltaBaselineRef = useRef(0);
 
   // Set data point refresh rate (time between new point rendering)
@@ -82,7 +82,6 @@ export default function Chart({ ticker }: ChartProps) {
       case '5m': return 5000;       // 5 seconds
       case '1h': return 60000;      // 1 minute
       case '1d': return 300000;     // 5 minutes
-      case '1w': return 3600000;    // 1 hour
       default: return 1000;
     }
   };
@@ -94,7 +93,6 @@ export default function Chart({ ticker }: ChartProps) {
       case '5m': return 60;        
       case '1h': return 60;         
       case '1d': return 288;        
-      case '1w': return 168;        
       default: return 60;
     }
   };
@@ -215,7 +213,6 @@ export default function Chart({ ticker }: ChartProps) {
           minute: '2-digit'
         });
       case '1d':
-      case '1w':
         return date.toLocaleDateString('en-US', {
           month: 'short',
           day: 'numeric',

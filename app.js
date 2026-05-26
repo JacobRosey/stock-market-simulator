@@ -308,11 +308,6 @@ app.get('/api/stocks/:ticker/price-data', async (req, res) => {
                 bucketSeconds = 300;
                 maxPoints = 288;
                 break;
-            case '1w':
-                timeFilter = "INTERVAL 7 DAY";
-                bucketSeconds = 3600;
-                maxPoints = 168;
-                break;
             default:
                 timeFilter = "INTERVAL 24 HOUR";
                 bucketSeconds = 300;
