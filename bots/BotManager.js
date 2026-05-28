@@ -448,6 +448,12 @@ class BotRuntime {
             return false;
         }
 
+        this.logger.info(
+            `[bot-order] ${this.username} placed ${orderInput.side} ${orderInput.quantity} ${orderInput.ticker} ${orderInput.type}`
+            + `${orderInput.price ? ` @ ${orderInput.price}` : ''}`
+            + ` orderId=${result.orderId}`
+        );
+
         const order = {
             orderId: result.orderId,
             ticker: orderInput.ticker,
