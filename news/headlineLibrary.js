@@ -232,7 +232,7 @@ export const HEADLINE_TEMPLATES = [
         scope: 'ticker',
         sectors: ['FINANCE'],
         sentimentRange: [-6, -3],
-        text: '{ticker} faces a regulatory review over customer fees',
+        text: '{ticker} faces a regulatory review over predatory lending',
     },
     {
         id: 28,
@@ -302,7 +302,7 @@ export const HEADLINE_TEMPLATES = [
         scope: 'ticker',
         sectors: ['MANUFACTURING'],
         sentimentRange: [-9, -5],
-        text: '{ticker} shuts down a plant temporarily after equipment problems',
+        text: '{ticker} shuts down a plant temporarily during union strike',
     },
     {
         id: 38,
