@@ -439,6 +439,7 @@ async function seedMarketMakerLiquidity(connection) {
     for (const { ticker, price } of STARTING_STOCKS) {
         const bidPrice = roundPrice(price - halfSpread);
         const askPrice = roundPrice(price + halfSpread);
+        console.log(ticker, bidPrice, askPrice)
         const bidEstimatedAmount = roundMoney(bidPrice * MARKET_MAKER_STARTING_ORDER_SIZE);
         const askEstimatedAmount = roundMoney(askPrice * MARKET_MAKER_STARTING_ORDER_SIZE);
 
