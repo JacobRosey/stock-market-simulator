@@ -32,6 +32,7 @@ export const WebSocketProvider = () => {
     const [socket, setSocket] = useState<Socket | null>(null);
     const [prices, setPrices] = useState<Record<string, number>>({});
     const pricesRef = useRef<Record<string, number>>({});
+    const [seedPrices, setSeedPrices] = useState<Partial<Record<Ticker, number>>>({});
     const [userOrders, setUserOrders] = useState<Order[]>([]);
     const [ordersLoading, setOrdersLoading] = useState(true)
     const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
@@ -240,7 +241,7 @@ export const WebSocketProvider = () => {
         });
 
         // Update orderbook data
-        newSocket.on('depth', (data: OrderDepth & { ticker: string }) => {
+        newSocket.on('depth', (data: OrderDepth & { ticker: Ticker }) => {
 
             console.log("Received depth snapshot")
 
@@ -259,6 +260,12 @@ export const WebSocketProvider = () => {
                 pricesRef.current = newPrice;
                 return newPrice;
             });
+            if (data.seedPrice && data.seedPrice > 0) {
+                setSeedPrices(prev => ({
+                    ...prev,
+                    [data.ticker]: data.seedPrice
+                }));
+            }
             setPortfolio(prev => {
                 if (!prev || data.lastPrice <= 0) return prev;
 
@@ -410,6 +417,7 @@ export const WebSocketProvider = () => {
     return (
         <WebSocketContext.Provider value={{
             prices,
+            seedPrices,
             userOrders,
             ordersLoading,
             leaderboard,

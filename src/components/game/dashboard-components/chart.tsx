@@ -60,7 +60,7 @@ function PositionLineLabel({ viewBox, label }: { viewBox?: any; label: string })
 }
 
 export default function Chart({ ticker }: ChartProps) {
-  const { prices, portfolio, volume24hByTicker } = useWebSocket();
+  const { prices, seedPrices, portfolio, volume24hByTicker } = useWebSocket();
   const [history, setHistory] = useState<PricePoint[]>([]);
   const [showInfo, setShowInfo] = useState(false);
   const [range, setRange] = useState('1m');
@@ -249,7 +249,7 @@ export default function Chart({ ticker }: ChartProps) {
 
 
   const formattedPrice = Number(currentPrice).toFixed(2);
-  const seedPrice = Number(stats.seedPrice ?? 0);
+  const seedPrice = Number(seedPrices?.[ticker] ?? stats.seedPrice ?? 0);
   const change = seedPrice > 0 ? currentPrice - seedPrice : 0;
   const changePercent = seedPrice > 0 ? (change / seedPrice) * 100 : 0;
   const isPositive = change >= 0;

@@ -121,7 +121,7 @@ const websocket = createWebsocketServer(app, {
     getLatestLeaderboard: marketServices.getLatestLeaderboard,
     getMarketPrices: marketServices.getMarketPrices,
     broadcastLeaderboardUpdate: marketServices.broadcastLeaderboardUpdate,
-    getDepth: marketServices.getDepth,
+    getTickerSnapshot: marketServices.getTickerSnapshot,
     verifyOrderOwnership: marketServices.verifyOrderOwnership,
     publishCancelOrder: marketServices.publishCancelOrder,
     onUserConnectionsChanged: syncBackgroundActivity
@@ -347,12 +347,13 @@ app.get('/api/stocks/:ticker/price-data', async (req, res) => {
 
         if (sourceRows.length === 0) {
             const current = Number(stock.price ?? 0);
+            const seedPrice = marketServices.getSeedPrice(ticker, current);
 
             return res.json({
                 name: stock.name,
                 description: stock.description,
                 current,
-                seedPrice: Number(stock.price ?? current),
+                seedPrice,
                 volume24h: Number(volumeRows[0]?.volume24h ?? 0),
                 high: current,
                 low: current,
@@ -375,12 +376,13 @@ app.get('/api/stocks/:ticker/price-data', async (req, res) => {
 
         const prices = sourceRows.map(p => Number(p.price)).filter(Number.isFinite);
         const current = Number(sourceRows[sourceRows.length - 1]?.price ?? stock.price ?? 0);
+        const seedPrice = marketServices.getSeedPrice(ticker, current);
 
         res.json({
             name: stock.name,
             description: stock.description,
             current,
-            seedPrice: Number(stock.price ?? current),
+            seedPrice,
             volume24h: Number(volumeRows[0]?.volume24h ?? 0),
             high: prices.length > 0 ? Math.max(...prices) : current,
             low: prices.length > 0 ? Math.min(...prices) : current,
@@ -560,6 +562,9 @@ app.get(/^\/(?!api|auth|socket\.io|assets).*/, (req, res) => {
     res.sendFile(path.join(distPath, 'index.html'));
 });
 
+await marketServices.loadTickerMap();
+await marketServices.initializeDepthCache();
+
 websocket.listen(PORT);
 
 const redisLayer = await createRedisLayer({
@@ -573,14 +578,13 @@ const redisLayer = await createRedisLayer({
     applyOrderRejectionToDatabase: marketServices.applyOrderRejectionToDatabase,
     toNormalUnits: marketServices.toNormalUnits,
     userToSocket: websocket.userToSocket,
-    getBotManager: marketServices.getBotManager
+    getBotManager: marketServices.getBotManager,
+    getAllTimeChange: marketServices.getAllTimeChange
 });
 
 marketServices.setPublisher(redisLayer.publisher);
 marketServices.setRedisClient(redisLayer.redisClient);
 
-await marketServices.loadTickerMap();
-await marketServices.initializeDepthCache();
 await marketServices.recoverUnfilledOrders();
 
 const botManager = createBotManager({

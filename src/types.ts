@@ -114,6 +114,9 @@ export interface OrderDepth {
     bids: DepthLevel[];
     asks: DepthLevel[];   
     lastPrice: number; 
+    seedPrice?: number;
+    allTimeChange?: number;
+    allTimeChangePercent?: number;
 }
 
 // ===== PORTFOLIO TYPES =====
@@ -217,6 +220,7 @@ export interface ApiResponse<T> {
 export interface WebSocketContextValue {
     // State
     prices: Record<Ticker, number>;
+    seedPrices: Partial<Record<Ticker, number>>;
     userOrders: Order[];
     portfolio: Portfolio | null;
     leaderboard: LeaderboardEntry[];

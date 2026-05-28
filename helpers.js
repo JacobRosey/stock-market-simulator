@@ -29,6 +29,7 @@ export function createMarketServices({ db }) {
 
     const tickerToId = new Map();
     const depthCache = new Map();
+    const seedPriceCache = new Map();
     const pendingFillTrades = [];
 
     function setIo(nextIo) {
@@ -61,6 +62,35 @@ export function createMarketServices({ db }) {
 
     function getDepth(ticker) {
         return depthCache.get(ticker);
+    }
+
+    function getSeedPrice(ticker, fallbackPrice = 0) {
+        const seedPrice = Number(seedPriceCache.get(ticker) ?? fallbackPrice ?? 0);
+        return Number.isFinite(seedPrice) && seedPrice > 0 ? seedPrice : 0;
+    }
+
+    function getAllTimeChange(ticker, currentPrice) {
+        const current = Number(currentPrice ?? 0);
+        const seedPrice = getSeedPrice(ticker, current);
+        const change = seedPrice > 0 ? current - seedPrice : 0;
+        const changePercent = seedPrice > 0 ? (change / seedPrice) * 100 : 0;
+
+        return {
+            seedPrice,
+            allTimeChange: change,
+            allTimeChangePercent: changePercent
+        };
+    }
+
+    function getTickerSnapshot(ticker) {
+        const depth = getDepth(ticker);
+        if (!depth) return null;
+
+        return {
+            ...depth,
+            ticker,
+            ...getAllTimeChange(ticker, depth.lastPrice)
+        };
     }
 
     function getMarketPrices() {
@@ -865,10 +895,13 @@ export function createMarketServices({ db }) {
         const [rows] = await db.query('SELECT ticker, price FROM stocks');
 
         for (const row of rows) {
+            const price = parseFloat(row.price);
+            seedPriceCache.set(row.ticker, price);
+
             const defaultDepth = {
                 asks: [],
                 bids: [],
-                lastPrice: parseFloat(row.price)
+                lastPrice: price
             };
 
             depthCache.set(row.ticker, defaultDepth);
@@ -1069,6 +1102,7 @@ export function createMarketServices({ db }) {
     return {
         depthCache,
         tickerToId,
+        seedPriceCache,
         setIo,
         setPublisher,
         setRedisClient,
@@ -1077,6 +1111,9 @@ export function createMarketServices({ db }) {
         getBotManager,
         getLatestLeaderboard,
         getDepth,
+        getSeedPrice,
+        getAllTimeChange,
+        getTickerSnapshot,
         getMarketPrices,
         getPortfolioCurrentPrice,
         applyStimulusCashForNews,

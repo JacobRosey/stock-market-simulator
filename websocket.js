@@ -7,7 +7,7 @@ export function createWebsocketServer(app, {
     getLatestLeaderboard,
     getMarketPrices,
     broadcastLeaderboardUpdate,
-    getDepth,
+    getTickerSnapshot,
     verifyOrderOwnership,
     publishCancelOrder,
     onUserConnectionsChanged = () => {}
@@ -84,12 +84,9 @@ export function createWebsocketServer(app, {
 
             socket.join(`ticker:${ticker}`);
 
-            const cachedDepth = getDepth(ticker);
-            if (cachedDepth) {
-                socket.emit('depth', {
-                    ...cachedDepth,
-                    ticker: ticker
-                });
+            const tickerSnapshot = getTickerSnapshot(ticker);
+            if (tickerSnapshot) {
+                socket.emit('depth', tickerSnapshot);
             }
         });
 

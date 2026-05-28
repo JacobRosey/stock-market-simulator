@@ -11,7 +11,8 @@ export async function createRedisLayer({
     applyOrderRejectionToDatabase,
     toNormalUnits,
     userToSocket,
-    getBotManager
+    getBotManager,
+    getAllTimeChange
 }) {
     const redisUrl = process.env.REDIS_URL;
     const redisClient = redisUrl ? new Redis(redisUrl) : new Redis();
@@ -47,7 +48,8 @@ export async function createRedisLayer({
                     depthCache.set(ticker, finalDepth);
                     io.to(`ticker:${ticker}`).emit('depth', {
                         ...finalDepth,
-                        ticker: ticker
+                        ticker,
+                        ...getAllTimeChange(ticker, finalDepth.lastPrice)
                     });
                 }
             } catch (e) {
