@@ -520,6 +520,10 @@ async function resetStockPrices(connection) {
     if (rows.length !== STARTING_STOCKS.length || mismatchedTickers.length > 0) {
         throw new Error(`Stock price reset verification failed for: ${mismatchedTickers.join(', ') || 'missing ticker'}.`);
     }
+
+    return Object.fromEntries(
+        STARTING_STOCKS.map(({ ticker }) => [ticker, storedPrices.get(ticker)])
+    );
 }
 
 async function resetHumanAccounts(connection) {
@@ -547,7 +551,7 @@ export async function restartSeason() {
 
         await wipeSeasonActivity(connection);
 
-        await resetStockPrices(connection);
+        const resetPrices = await resetStockPrices(connection);
 
         const botsCreated = await ensureBotUsers(connection);
         const guestCreated = await ensureGuestUser(connection);
@@ -567,6 +571,7 @@ export async function restartSeason() {
             guestCreated,
             botsReset: BOT_USERNAMES.length,
             stocksReset: STARTING_STOCKS.length,
+            resetPrices,
             marketMakerLiquidity,
             redisSeasonState,
             botStartingAccountValue: BOT_STARTING_ACCOUNT_VALUE,
@@ -590,6 +595,7 @@ if (isDirectRun) {
             console.log(`Guest created: ${result.guestCreated}`);
             console.log(`Bots reset: ${result.botsReset}`);
             console.log(`Stocks reset: ${result.stocksReset}`);
+            console.log(`BIOV reset price: ${result.resetPrices.BIOV}`);
             console.log(`Market maker orders seeded: ${result.marketMakerLiquidity.ordersSeeded}`);
             console.log(`Market maker reserved cash: ${result.marketMakerLiquidity.reservedCash.toFixed(2)}`);
             if (result.redisSeasonState.cleared) {

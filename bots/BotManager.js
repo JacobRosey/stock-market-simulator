@@ -17,6 +17,7 @@ const EXIT_PROBABILITY_PER_STEP = 0.2;
 const EXIT_MAX_PROBABILITY = 0.85;
 const EXIT_MAX_POSITION_SHARE = 0.2;
 const EXIT_MAX_OPEN_SELL_SHARE = 0.3;
+const EXIT_MAX_ORDER_QUANTITY = 200;
 const TAKE_PROFIT_LIMIT_OFFSET = 0.03;
 const STOP_LOSS_LIMIT_OFFSET = 0.03;
 const BACKGROUND_FLOW_RATE_PER_MINUTE = 1.8;
@@ -35,6 +36,7 @@ const POSITION_REBALANCE_TRIGGER_SHARE = 0.12;
 const POSITION_REBALANCE_TARGET_SHARE = 0.09;
 const POSITION_REBALANCE_MAX_POSITION_SHARE = 0.2;
 const POSITION_REBALANCE_MAX_OPEN_SELL_SHARE = 0.35;
+const POSITION_REBALANCE_MAX_ORDER_QUANTITY = 200;
 const POSITION_REBALANCE_COOLDOWN_MS = 25_000;
 
 const BOT_TICKERS = COMPANY_TYPES.map((company) => company.ticker);
@@ -451,6 +453,7 @@ class BotRuntime {
         this.logger.info(
             `[bot-order] ${this.username} placed ${orderInput.side} ${orderInput.quantity} ${orderInput.ticker} ${orderInput.type}`
             + `${orderInput.price ? ` @ ${orderInput.price}` : ''}`
+            + `${intent.source ? ` source=${intent.source}` : ' source=strategy'}`
             + ` orderId=${result.orderId}`
         );
 
@@ -523,7 +526,8 @@ class BotRuntime {
             const desiredQuantity = Math.min(
                 availableShares,
                 maxPositionQuantity,
-                maxOpenSellQuantity - openSellQuantity
+                maxOpenSellQuantity - openSellQuantity,
+                EXIT_MAX_ORDER_QUANTITY
             );
             const quantity = Math.floor(desiredQuantity);
             if (quantity < 1) continue;
@@ -539,6 +543,7 @@ class BotRuntime {
                 type: 'LIMIT',
                 price,
                 quantity,
+                source: isTakeProfit ? 'exit_take_profit' : 'exit_stop_loss',
             });
         }
 
@@ -596,7 +601,8 @@ class BotRuntime {
                 availableShares,
                 excessQuantity,
                 maxPositionQuantity,
-                maxOpenSellQuantity - openSellQuantity
+                maxOpenSellQuantity - openSellQuantity,
+                POSITION_REBALANCE_MAX_ORDER_QUANTITY
             );
             if (quantity < 1) continue;
 
@@ -625,6 +631,7 @@ class BotRuntime {
                     type: 'LIMIT',
                     price,
                     quantity: candidate.quantity,
+                    source: 'position_rebalance',
                 }];
             });
     }
@@ -660,6 +667,7 @@ class BotRuntime {
             type: 'LIMIT',
             price,
             quantity,
+            source: 'background_flow',
         }];
     }
 

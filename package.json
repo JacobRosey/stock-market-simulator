@@ -9,7 +9,7 @@
     "dev:cpp": "set PATH=C:\\msys64\\ucrt64\\bin;%PATH% && engine.exe",
     "compile:cpp": "set PATH=C:\\msys64\\ucrt64\\bin;%PATH% && cd /d C:\\Users\\jrose\\Desktop\\paper-trader\\market-simulator && g++ engine.cpp -o engine.exe -lredis++ -lhiredis",
     "compile:cpp:linux": "g++ engine.cpp -std=c++20 -O2 -pthread -o engine -lredis++ -lhiredis",
-    "start": "node app.js",
+    "start": "bash ./scripts/start-container.sh",
     "start:container": "bash ./scripts/start-container.sh",
     "dev:redis": "C:\\redis\\redis-server.exe",
     "dev:all": "npm run compile:cpp && concurrently \"npm run dev:redis\" \"npm run dev\" \"npm run dev:backend\" \"npm run dev:cpp\"",
