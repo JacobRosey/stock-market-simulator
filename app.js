@@ -10,6 +10,7 @@ import { createBotManager } from './bots/BotManager.js';
 import { createWebsocketServer } from './websocket.js';
 import { createRedisLayer } from './redis.js';
 import { createMarketServices, tickers } from './helpers.js';
+import { ensureDatabaseReady } from './scripts/db-bootstrap.js';
 
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -66,6 +67,8 @@ const corsOptions = {
 
 app.use(cookieParser());
 app.use(cors(corsOptions));
+
+await ensureDatabaseReady();
 
 const db = mysql.createPool({
     host: process.env.DB_HOST,

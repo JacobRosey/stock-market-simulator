@@ -1,7 +1,7 @@
 CREATE DATABASE IF NOT EXISTS marketsim;
 USE marketsim;
 
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
     user_id CHAR(36) NOT NULL DEFAULT (UUID()),
     username VARCHAR(30) UNIQUE NOT NULL,
     p_hash VARCHAR(60) NOT NULL,
@@ -12,7 +12,7 @@ CREATE TABLE users (
     PRIMARY KEY (user_id)
 );
 
-CREATE TABLE stocks (
+CREATE TABLE IF NOT EXISTS stocks (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     ticker VARCHAR(10) UNIQUE NOT NULL,
     name VARCHAR(100),
@@ -22,7 +22,7 @@ CREATE TABLE stocks (
     PRIMARY KEY (id)
 );
 
-CREATE TABLE portfolio (
+CREATE TABLE IF NOT EXISTS portfolio (
     user_id CHAR(36) NOT NULL,
     ticker VARCHAR(10) NOT NULL,
     shares DECIMAL(12, 4) NOT NULL DEFAULT 0,
@@ -37,7 +37,7 @@ CREATE TABLE portfolio (
         FOREIGN KEY (ticker) REFERENCES stocks(ticker) ON DELETE CASCADE
 );
 
-CREATE TABLE price_history (
+CREATE TABLE IF NOT EXISTS price_history (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     stock_id BIGINT UNSIGNED NOT NULL,
     price DECIMAL(10,2) NOT NULL,
@@ -50,7 +50,7 @@ CREATE TABLE price_history (
     INDEX idx_price_history_stock_timestamp (stock_id, timestamp DESC)
 );
 
-CREATE TABLE orders (
+CREATE TABLE IF NOT EXISTS orders (
     id INT PRIMARY KEY AUTO_INCREMENT,
     user_id CHAR(36) NOT NULL,
     ticker VARCHAR(10) NOT NULL,

@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 import mysql from 'mysql2/promise';
 import { fileURLToPath } from 'url';
+import { ensureDatabaseReady } from './db-bootstrap.js';
 
 dotenv.config();
 
@@ -493,6 +494,8 @@ async function wipeSeasonActivity(connection) {
 }
 
 export async function restartSeason() {
+    await ensureDatabaseReady();
+
     const connection = await createDbConnection();
 
     try {
