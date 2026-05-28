@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import Redis from 'ioredis';
 import mysql from 'mysql2/promise';
 import { fileURLToPath } from 'url';
 import { ensureDatabaseReady } from './db-bootstrap.js';
@@ -12,6 +13,13 @@ const GUEST_PASSWORD_HASH = '$2b$10$.CZVOmm3NE6RhOHcObuq3uGPP7SpizQlQGQuUGpSQJpK
 const MARKET_MAKER_USERNAME = 'bot_market_maker';
 const MARKET_MAKER_STARTING_ORDER_SIZE = 50;
 const MARKET_MAKER_STARTING_SPREAD = 0.25;
+const REDIS_SEASON_KEYS = [
+    'orders:recovery',
+    'orders:new',
+    'orders:filled',
+    'orders:rejected',
+    'orders:cancel',
+];
 
 const BOT_USERNAMES = [
     'bot_market_maker',
@@ -340,6 +348,42 @@ function createDbConnection() {
     });
 }
 
+function createRedisClient() {
+    const options = {
+        lazyConnect: true,
+        connectTimeout: 1000,
+        maxRetriesPerRequest: 1,
+        enableOfflineQueue: false,
+    };
+
+    return process.env.REDIS_URL
+        ? new Redis(process.env.REDIS_URL, options)
+        : new Redis(options);
+}
+
+async function clearRedisSeasonState() {
+    const redis = createRedisClient();
+
+    try {
+        await redis.connect();
+        const keysDeleted = await redis.del(...REDIS_SEASON_KEYS);
+        return {
+            attempted: true,
+            cleared: true,
+            keysDeleted,
+        };
+    } catch (error) {
+        console.warn(`Skipped Redis season state clear: ${error.message}`);
+        return {
+            attempted: true,
+            cleared: false,
+            error: error.message,
+        };
+    } finally {
+        redis.disconnect();
+    }
+}
+
 async function resetBotPortfolio(connection, username) {
     const [users] = await connection.query(
         'SELECT user_id FROM users WHERE username = ?',
@@ -516,6 +560,7 @@ export async function restartSeason() {
         const marketMakerLiquidity = await seedMarketMakerLiquidity(connection);
 
         await connection.commit();
+        const redisSeasonState = await clearRedisSeasonState();
 
         return {
             botsCreated,
@@ -523,6 +568,7 @@ export async function restartSeason() {
             botsReset: BOT_USERNAMES.length,
             stocksReset: STARTING_STOCKS.length,
             marketMakerLiquidity,
+            redisSeasonState,
             botStartingAccountValue: BOT_STARTING_ACCOUNT_VALUE,
             humanStartingCash: HUMAN_STARTING_CASH,
         };
@@ -546,6 +592,11 @@ if (isDirectRun) {
             console.log(`Stocks reset: ${result.stocksReset}`);
             console.log(`Market maker orders seeded: ${result.marketMakerLiquidity.ordersSeeded}`);
             console.log(`Market maker reserved cash: ${result.marketMakerLiquidity.reservedCash.toFixed(2)}`);
+            if (result.redisSeasonState.cleared) {
+                console.log(`Redis season keys deleted: ${result.redisSeasonState.keysDeleted}`);
+            } else {
+                console.log(`Redis season keys not cleared: ${result.redisSeasonState.error}`);
+            }
             console.log(`Bot starting account value: ${result.botStartingAccountValue.toFixed(2)}`);
             console.log(`Human starting cash: ${result.humanStartingCash.toFixed(2)}`);
         })
