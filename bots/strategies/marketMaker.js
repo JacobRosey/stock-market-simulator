@@ -148,9 +148,7 @@ function buildQuotePair(getDepth, ticker, positionShares) {
         return null;
     }
 
-    const midpoint = Number.isFinite(bestBid) && Number.isFinite(bestAsk) && Number.isFinite(mid)
-        ? mid
-        : referencePrice;
+    const midpoint = referencePrice;
     const offset = randomQuoteOffset(profile.targetSpread);
     const skew = getInventorySkew(positionShares);
     const quote = {
