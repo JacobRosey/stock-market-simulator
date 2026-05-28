@@ -1,11 +1,11 @@
 #!/bin/bash
 set -e
 
-./engine &
-ENGINE_PID=$!
-
 echo "Running season setup..."
 node scripts/restart-season.js
+
+./engine &
+ENGINE_PID=$!
 
 node app.js &
 APP_PID=$!
