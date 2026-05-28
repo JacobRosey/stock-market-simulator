@@ -37,6 +37,8 @@ const POSITION_REBALANCE_TARGET_SHARE = 0.09;
 const POSITION_REBALANCE_MAX_POSITION_SHARE = 0.2;
 const POSITION_REBALANCE_MAX_OPEN_SELL_SHARE = 0.35;
 const POSITION_REBALANCE_MAX_ORDER_QUANTITY = 200;
+const POSITION_REBALANCE_BASELINE_DRIFT_SHARE = 0.03;
+const POSITION_REBALANCE_BASELINE_DRIFT_MULTIPLIER = 1.25;
 const POSITION_REBALANCE_COOLDOWN_MS = 25_000;
 
 const BOT_TICKERS = COMPANY_TYPES.map((company) => company.ticker);
@@ -187,6 +189,7 @@ class BotRuntime {
         this.reservedCash = Number(user.reserved_cash ?? 0);
         this.depositedCash = Number(user.deposited_cash ?? 0);
         this.positions = new Map();
+        this.initialPositionShareByTicker = new Map();
         this.openOrders = new Map();
         this.consumedSignalVersionByTicker = new Map();
         this.sentimentCooldownUntilByTicker = new Map();
@@ -220,6 +223,27 @@ class BotRuntime {
             reservedShares: Number(row.reserved_shares ?? 0),
             totalCost: Number(row.total_cost ?? 0),
         });
+    }
+
+    captureInitialPortfolioShares() {
+        const accountValue = Number(this.depositedCash ?? 0) > 0
+            ? Number(this.depositedCash)
+            : Math.max(
+                0,
+                Number(this.cash ?? 0)
+                + [...this.positions.values()].reduce((total, position) => (
+                    total + Math.max(0, Number(position.totalCost ?? 0))
+                ), 0)
+            );
+
+        this.initialPositionShareByTicker.clear();
+        if (!Number.isFinite(accountValue) || accountValue <= 0) return;
+
+        for (const [ticker, position] of this.positions.entries()) {
+            const totalCost = Math.max(0, Number(position.totalCost ?? 0));
+            if (totalCost <= 0) continue;
+            this.initialPositionShareByTicker.set(ticker, totalCost / accountValue);
+        }
     }
 
     hydrateOrder(row) {
@@ -565,6 +589,25 @@ class BotRuntime {
         return value;
     }
 
+    _getPositionRebalanceThresholds(ticker) {
+        const baselineShare = Number(this.initialPositionShareByTicker.get(ticker) ?? 0);
+        if (!Number.isFinite(baselineShare) || baselineShare <= 0) {
+            return {
+                triggerShare: POSITION_REBALANCE_TRIGGER_SHARE,
+                targetShare: POSITION_REBALANCE_TARGET_SHARE,
+            };
+        }
+
+        return {
+            triggerShare: Math.max(
+                POSITION_REBALANCE_TRIGGER_SHARE,
+                baselineShare + POSITION_REBALANCE_BASELINE_DRIFT_SHARE,
+                baselineShare * POSITION_REBALANCE_BASELINE_DRIFT_MULTIPLIER
+            ),
+            targetShare: Math.max(POSITION_REBALANCE_TARGET_SHARE, baselineShare),
+        };
+    }
+
     _buildPositionRebalanceIntents() {
         if (this.strategy.positionRebalance === false) return [];
 
@@ -588,13 +631,14 @@ class BotRuntime {
 
             const positionValue = shares * referencePrice;
             const portfolioShare = positionValue / portfolioValue;
-            if (portfolioShare <= POSITION_REBALANCE_TRIGGER_SHARE) continue;
+            const { triggerShare, targetShare } = this._getPositionRebalanceThresholds(ticker);
+            if (portfolioShare <= triggerShare) continue;
 
             const openSellQuantity = this.getOpenOrderCount(ticker, 'SELL');
             const maxOpenSellQuantity = Math.max(1, Math.floor(shares * POSITION_REBALANCE_MAX_OPEN_SELL_SHARE));
             if (openSellQuantity >= maxOpenSellQuantity) continue;
 
-            const targetValue = portfolioValue * POSITION_REBALANCE_TARGET_SHARE;
+            const targetValue = portfolioValue * targetShare;
             const excessQuantity = Math.floor((positionValue - targetValue) / referencePrice);
             const maxPositionQuantity = Math.max(1, Math.floor(shares * POSITION_REBALANCE_MAX_POSITION_SHARE));
             const quantity = Math.min(
@@ -610,6 +654,8 @@ class BotRuntime {
                 ticker,
                 quantity,
                 portfolioShare,
+                triggerShare,
+                targetShare,
             });
         }
 
@@ -1119,6 +1165,10 @@ export class BotManager {
 
         for (const row of positions) {
             runtimeMap.get(row.user_id)?.hydratePosition(row);
+        }
+
+        for (const runtime of runtimes) {
+            runtime.captureInitialPortfolioShares();
         }
 
         for (const row of openOrders) {
