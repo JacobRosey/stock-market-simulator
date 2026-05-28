@@ -1,6 +1,6 @@
 import { BOT_NAME_TO_STRATEGY } from './strategies/index.js';
 import { COMPANY_TYPES } from '../news/headlineLibrary.js';
-import { buildTakerLimitPrice, getReferencePrice, roundPrice } from './strategies/shared.js';
+import { buildTakerLimitPrice, getDepthInfo, getReferencePrice, roundPrice } from './strategies/shared.js';
 
 const MICRO_UNIT = 1e6;
 const MIN_SENTIMENT = -10;
@@ -523,13 +523,25 @@ class BotRuntime {
             const cooldownUntil = this.exitCooldownUntilByTicker.get(ticker) ?? 0;
             if (now < cooldownUntil) continue;
 
-            const referencePrice = getReferencePrice(this.getDepth, ticker);
+            const depthInfo = getDepthInfo(this.getDepth, ticker);
+            const referencePrice = this._getValuationPrice(ticker);
             if (!Number.isFinite(referencePrice) || referencePrice <= 0) continue;
 
             const gainPercent = (referencePrice - averageCost) / averageCost;
             const isTakeProfit = gainPercent >= EXIT_TRIGGER_STEP;
             const isStopLoss = gainPercent <= -EXIT_TRIGGER_STEP;
             if (!isTakeProfit && !isStopLoss) continue;
+
+            this.logger.info(
+                `[bot-exit-signal] ${this.username} ${ticker}`
+                + ` averageCost=${averageCost.toFixed(2)}`
+                + ` referencePrice=${referencePrice.toFixed(2)}`
+                + ` gainPercent=${(gainPercent * 100).toFixed(2)}%`
+                + ` lastPrice=${Number(depthInfo.depth?.lastPrice ?? 0).toFixed(2)}`
+                + ` bestBid=${Number(depthInfo.bestBid ?? 0).toFixed(2)}`
+                + ` bestAsk=${Number(depthInfo.bestAsk ?? 0).toFixed(2)}`
+                + ` source=${isTakeProfit ? 'exit_take_profit' : 'exit_stop_loss'}`
+            );
 
             const openSellQuantity = this.getOpenOrderCount(ticker, 'SELL');
             const maxOpenSellQuantity = Math.max(1, Math.floor(shares * EXIT_MAX_OPEN_SELL_SHARE));
@@ -580,13 +592,22 @@ class BotRuntime {
             const shares = Math.max(0, Number(position.shares ?? 0));
             if (shares <= 0) continue;
 
-            const referencePrice = getReferencePrice(this.getDepth, ticker);
+            const referencePrice = this._getValuationPrice(ticker);
             if (Number.isFinite(referencePrice) && referencePrice > 0) {
                 value += shares * referencePrice;
             }
         }
 
         return value;
+    }
+
+    _getValuationPrice(ticker) {
+        const lastPrice = Number(this.getDepth(ticker)?.lastPrice ?? 0);
+        if (Number.isFinite(lastPrice) && lastPrice > 0) {
+            return lastPrice;
+        }
+
+        return getReferencePrice(this.getDepth, ticker);
     }
 
     _getPositionRebalanceThresholds(ticker) {
@@ -626,7 +647,7 @@ class BotRuntime {
             const cooldownUntil = this.positionRebalanceCooldownUntilByTicker?.get(ticker) ?? 0;
             if (now < cooldownUntil) continue;
 
-            const referencePrice = getReferencePrice(this.getDepth, ticker);
+            const referencePrice = this._getValuationPrice(ticker);
             if (!Number.isFinite(referencePrice) || referencePrice <= 0) continue;
 
             const positionValue = shares * referencePrice;
