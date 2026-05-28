@@ -1,5 +1,3 @@
-import { COMPANY_TYPES } from './news/headlineLibrary.js';
-
 export const tickers = [
     'NEXUS', 'QCI', 'CLSE', 'NSMC',
     'AGB', 'CRC', 'SGI', 'FINT',
@@ -9,22 +7,6 @@ export const tickers = [
 ];
 
 export const MICRO_UNIT = 1e6;
-
-const FAIR_VALUE_SPREAD_BY_ARCHETYPE = {
-    defensive: 0.03,
-    stable: 0.04,
-    moderate: 0.07,
-    cyclical: 0.09,
-    risky: 0.11
-};
-
-const FAIR_VALUE_SENTIMENT_MULTIPLIER_BY_ARCHETYPE = {
-    defensive: 0.25,
-    stable: 0.375,
-    moderate: 0.45,
-    cyclical: 0.5,
-    risky: 0.625
-};
 
 const LEADERBOARD_BROADCAST_INTERVAL_MS = 5_000;
 const FILL_BATCH_WINDOW_MS = 20;
@@ -46,8 +28,6 @@ export function createMarketServices({ db }) {
     let fillBatchInFlight = false;
 
     const tickerToId = new Map();
-    const stockMetaByTicker = new Map();
-    const estimatedValueByTicker = new Map();
     const depthCache = new Map();
     const pendingFillTrades = [];
 
@@ -79,10 +59,6 @@ export function createMarketServices({ db }) {
         return latestLeaderboard;
     }
 
-    function getEstimatedValueEntries() {
-        return estimatedValueByTicker.entries();
-    }
-
     function getDepth(ticker) {
         return depthCache.get(ticker);
     }
@@ -97,69 +73,6 @@ export function createMarketServices({ db }) {
 
     function roundMoney(value) {
         return Number(Number(value).toFixed(2));
-    }
-
-    function getCompanyProfile(ticker) {
-        return COMPANY_TYPES.find(company => company.ticker === ticker);
-    }
-
-    function createEstimatedValueRange(price, archetype = 'moderate') {
-        const basePrice = Number(price ?? 0);
-        const spread = FAIR_VALUE_SPREAD_BY_ARCHETYPE[archetype] ?? FAIR_VALUE_SPREAD_BY_ARCHETYPE.moderate;
-        const halfRange = Math.max(0.5, basePrice * spread);
-
-        return {
-            low: roundMoney(Math.max(0.01, basePrice - halfRange)),
-            high: roundMoney(basePrice + halfRange)
-        };
-    }
-
-    function getAffectedTickersForNews(news) {
-        if (news.global) return [...tickers];
-
-        if (Array.isArray(news.affectedTickers) && news.affectedTickers.length > 0) {
-            return news.affectedTickers.filter(ticker => tickers.includes(ticker));
-        }
-
-        const affected = new Set();
-        const affectedSectors = new Set(news.affectedSectors ?? []);
-
-        if (affectedSectors.size > 0) {
-            for (const company of COMPANY_TYPES) {
-                if (affectedSectors.has(company.sector)) {
-                    affected.add(company.ticker);
-                }
-            }
-        }
-
-        return [...affected].filter(ticker => tickers.includes(ticker));
-    }
-
-    function updateEstimatedValuesForNews(news) {
-        const updates = {};
-
-        for (const ticker of getAffectedTickersForNews(news)) {
-            const profile = getCompanyProfile(ticker);
-            const archetype = profile?.archetype ?? 'moderate';
-            const currentRange = estimatedValueByTicker.get(ticker)
-                ?? createEstimatedValueRange(stockMetaByTicker.get(ticker)?.price, archetype);
-            const multiplier = FAIR_VALUE_SENTIMENT_MULTIPLIER_BY_ARCHETYPE[archetype]
-                ?? FAIR_VALUE_SENTIMENT_MULTIPLIER_BY_ARCHETYPE.moderate;
-            const shift = Number(news.sentiment ?? 0) * multiplier;
-            const nextRange = {
-                low: roundMoney(Math.max(0.01, currentRange.low + shift)),
-                high: roundMoney(Math.max(0.01, currentRange.high + shift))
-            };
-
-            if (nextRange.high < nextRange.low) {
-                nextRange.high = nextRange.low;
-            }
-
-            estimatedValueByTicker.set(ticker, nextRange);
-            updates[ticker] = nextRange;
-        }
-
-        return updates;
     }
 
     function getStimulusCashAmount(news) {
@@ -966,16 +879,6 @@ export function createMarketServices({ db }) {
         const [rows] = await db.query('SELECT id, ticker, price FROM stocks');
         for (const row of rows) {
             tickerToId.set(row.ticker, row.id);
-            stockMetaByTicker.set(row.ticker, {
-                id: row.id,
-                price: Number(row.price ?? 0)
-            });
-
-            const profile = getCompanyProfile(row.ticker);
-            estimatedValueByTicker.set(
-                row.ticker,
-                createEstimatedValueRange(row.price, profile?.archetype)
-            );
         }
         console.log(`Loaded ${tickerToId.size} ticker mappings`);
     }
@@ -1165,7 +1068,6 @@ export function createMarketServices({ db }) {
 
     return {
         depthCache,
-        estimatedValueByTicker,
         tickerToId,
         setIo,
         setPublisher,
@@ -1174,13 +1076,9 @@ export function createMarketServices({ db }) {
         setBotManager,
         getBotManager,
         getLatestLeaderboard,
-        getEstimatedValueEntries,
         getDepth,
         getMarketPrices,
         getPortfolioCurrentPrice,
-        getCompanyProfile,
-        createEstimatedValueRange,
-        updateEstimatedValuesForNews,
         applyStimulusCashForNews,
         convertDepth,
         buildLeaderboard,

@@ -40,7 +40,7 @@ export const fetchPriceHistory = async (ticker: string, range = '1d') => {
             name: ticker,
             description: '',
             current: 0,
-            estimatedValue: null,
+            seedPrice: 0,
             volume24h: 0,
             high: 0,
             low: 0,

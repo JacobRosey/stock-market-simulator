@@ -44,11 +44,6 @@ export interface PriceUpdate {
     timestamp: number;
 }
 
-export interface EstimatedValueRange {
-    low: number;
-    high: number;
-}
-
 export interface VolumeUpdate {
     ticker: Ticker;
     volumeDelta: number;
@@ -205,7 +200,7 @@ export interface NewsData {
 
 // ===== WEBSOCKET TYPES =====
 export interface WebSocketMessage<T = any> {
-    type: 'PRICE_UPDATE' | 'ORDER_FILLED' | 'PORTFOLIO_UPDATE' | 'NEWS' | 'TRADE_EXECUTED' | 'LEADERBOARD_UPDATE' | 'VOLUME_UPDATE' | 'ESTIMATED_VALUE_UPDATE';
+    type: 'PRICE_UPDATE' | 'ORDER_FILLED' | 'PORTFOLIO_UPDATE' | 'NEWS' | 'TRADE_EXECUTED' | 'LEADERBOARD_UPDATE' | 'VOLUME_UPDATE';
     data: T;
     timestamp: number;
 }
@@ -227,7 +222,6 @@ export interface WebSocketContextValue {
     leaderboard: LeaderboardEntry[];
     latestNews: NewsData | null;
     volume24hByTicker: Partial<Record<Ticker, number>>;
-    estimatedValues: Partial<Record<Ticker, EstimatedValueRange>>;
     subscribeToTicker: (ticker: Ticker) => void;  
     getDepthForTicker: (ticker: Ticker) => OrderDepth | undefined; 
     attemptOrderCancellation: (orderId: number, ticker: Ticker, type: OrderType, side: OrderSide) => void;

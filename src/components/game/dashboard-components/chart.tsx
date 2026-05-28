@@ -12,10 +12,6 @@ interface PricePoint {
   timestamp: string;
   price: number;
 }
-interface EstimatedValueRange {
-  low: number;
-  high: number;
-}
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -27,10 +23,6 @@ function formatShares(shares: number) {
 
 function formatMoney(value: number) {
   return Number(value || 0).toFixed(2);
-}
-
-function formatMoneyRounded(value: number){
-  return Math.round(Number(formatMoney(value)))
 }
 
 function formatVolume(value: number) {
@@ -68,7 +60,7 @@ function PositionLineLabel({ viewBox, label }: { viewBox?: any; label: string })
 }
 
 export default function Chart({ ticker }: ChartProps) {
-  const { prices, portfolio, volume24hByTicker, estimatedValues } = useWebSocket();
+  const { prices, portfolio, volume24hByTicker } = useWebSocket();
   const [history, setHistory] = useState<PricePoint[]>([]);
   const [showInfo, setShowInfo] = useState(false);
   const [range, setRange] = useState('1m');
@@ -101,7 +93,7 @@ export default function Chart({ ticker }: ChartProps) {
     name: ticker,
     description: "",
     current: 0,
-    estimatedValue: null as EstimatedValueRange | null,
+    seedPrice: 0,
     volume24h: 0,
     high: 0,
     low: 0,
@@ -127,7 +119,7 @@ export default function Chart({ ticker }: ChartProps) {
         name: data?.name ?? ticker,
         description: data?.description ?? '',
         current: Number(data?.current ?? 0),
-        estimatedValue: data.estimatedValue ?? null,
+        seedPrice: Number(data?.seedPrice ?? 0),
         volume24h: data.volume24h ?? 0,
         high: Number(data?.high ?? 0),
         low: Number(data?.low ?? 0),
@@ -257,12 +249,9 @@ export default function Chart({ ticker }: ChartProps) {
 
 
   const formattedPrice = Number(currentPrice).toFixed(2);
-  const estimatedValue = estimatedValues[ticker] ?? stats.estimatedValue;
-  const estimatedMidpoint = estimatedValue
-    ? (estimatedValue.low + estimatedValue.high) / 2
-    : 0;
-  const change = estimatedMidpoint > 0 ? currentPrice - estimatedMidpoint : 0;
-  const changePercent = estimatedMidpoint > 0 ? (change / estimatedMidpoint) * 100 : 0;
+  const seedPrice = Number(stats.seedPrice ?? 0);
+  const change = seedPrice > 0 ? currentPrice - seedPrice : 0;
+  const changePercent = seedPrice > 0 ? (change / seedPrice) * 100 : 0;
   const isPositive = change >= 0;
 
   if (loading) return <div className="chart-loading">Loading chart...</div>;
@@ -293,12 +282,6 @@ export default function Chart({ ticker }: ChartProps) {
 
         <div className="daily-stats">
           <div className="stat">
-            <span className="stat-label">Est. Value</span>
-            <span className="stat-value">
-              {estimatedValue ? `$${formatMoneyRounded(estimatedValue.low)}-$${formatMoneyRounded(estimatedValue.high)}` : '-'}
-            </span>
-          </div>
-          <div className="stat">
             <span className="stat-label">24h Volume</span>
             <span className="stat-value">{formatVolume(stats.volume24h)}</span>
           </div>
@@ -315,7 +298,7 @@ export default function Chart({ ticker }: ChartProps) {
         <div className="price-info">
           <div className="current-price">${formattedPrice}</div>
           <div className={`price-change ${isPositive ? 'positive' : 'negative'}`}>
-            {isPositive ? '+' : ''}{change.toFixed(2)} vs est. ({isPositive ? '+' : ''}{changePercent.toFixed(2)}%)
+            {isPositive ? '+' : ''}{change.toFixed(2)} all time ({isPositive ? '+' : ''}{changePercent.toFixed(2)}%)
           </div>
         </div>
       </div>

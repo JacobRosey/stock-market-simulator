@@ -17,7 +17,6 @@ import type {
     ToastMessage,
     LeaderboardEntry,
     LeaderboardUpdate,
-    EstimatedValueRange,
     VolumeUpdate,
 } from '../types';
 
@@ -39,7 +38,6 @@ export const WebSocketProvider = () => {
     const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
     const [latestNews, setLatestNews] = useState<NewsData | null>(null);
     const [volume24hByTicker, setVolume24hByTicker] = useState<Partial<Record<Ticker, number>>>({});
-    const [estimatedValues, setEstimatedValues] = useState<Partial<Record<Ticker, EstimatedValueRange>>>({});
     const [isConnected, setIsConnected] = useState(false);
     const [lastMessageAt, setLastMessageAt] = useState<number | null>(null);
 
@@ -349,15 +347,6 @@ export const WebSocketProvider = () => {
             setLastMessageAt(Date.now());
         });
 
-        newSocket.on('ESTIMATED_VALUE_UPDATE', (data: Partial<Record<Ticker, EstimatedValueRange>>) => {
-            console.log(data)
-            setEstimatedValues(prev => ({
-                ...prev,
-                ...data,
-            }));
-            setLastMessageAt(Date.now());
-        });
-
         newSocket.on('LEADERBOARD_UPDATE', (data: LeaderboardEntry[] | LeaderboardUpdate) => {
             const rankings = Array.isArray(data) ? data : data.rankings;
             const nextPrices = Array.isArray(data) ? undefined : data.prices;
@@ -426,7 +415,6 @@ export const WebSocketProvider = () => {
             leaderboard,
             latestNews,
             volume24hByTicker,
-            estimatedValues,
             portfolio,
             isConnected,
             lastMessageAt,

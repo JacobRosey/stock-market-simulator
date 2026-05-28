@@ -3,7 +3,6 @@ import { Server } from 'socket.io';
 
 export function createWebsocketServer(app, {
     corsOptions,
-    getEstimatedValueEntries,
     getLatestGeneratedNews,
     getLatestLeaderboard,
     getMarketPrices,
@@ -61,8 +60,6 @@ export function createWebsocketServer(app, {
             if (latestGeneratedNews) {
                 socket.emit('NEWS', latestGeneratedNews);
             }
-
-            socket.emit('ESTIMATED_VALUE_UPDATE', Object.fromEntries(getEstimatedValueEntries()));
 
             const latestLeaderboard = getLatestLeaderboard();
             if (latestLeaderboard.length > 0) {

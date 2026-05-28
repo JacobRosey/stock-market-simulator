@@ -87,10 +87,6 @@ let newsGenerator = null;
 
 function handleNewsPayload(payload) {
     latestGeneratedNews = payload;
-    const estimatedValueUpdates = marketServices.updateEstimatedValuesForNews(payload);
-    if (Object.keys(estimatedValueUpdates).length > 0) {
-        websocket.io.emit('ESTIMATED_VALUE_UPDATE', estimatedValueUpdates);
-    }
     void marketServices.applyStimulusCashForNews(payload).catch(error => {
         console.error('Failed to apply stimulus cash:', error);
     });
@@ -121,7 +117,6 @@ function syncBackgroundActivity() {
 
 const websocket = createWebsocketServer(app, {
     corsOptions,
-    getEstimatedValueEntries: marketServices.getEstimatedValueEntries,
     getLatestGeneratedNews: () => latestGeneratedNews,
     getLatestLeaderboard: marketServices.getLatestLeaderboard,
     getMarketPrices: marketServices.getMarketPrices,
@@ -352,14 +347,12 @@ app.get('/api/stocks/:ticker/price-data', async (req, res) => {
 
         if (sourceRows.length === 0) {
             const current = Number(stock.price ?? 0);
-            const estimatedValue = marketServices.estimatedValueByTicker.get(ticker)
-                ?? marketServices.createEstimatedValueRange(current, marketServices.getCompanyProfile(ticker)?.archetype);
 
             return res.json({
                 name: stock.name,
                 description: stock.description,
                 current,
-                estimatedValue,
+                seedPrice: Number(stock.price ?? current),
                 volume24h: Number(volumeRows[0]?.volume24h ?? 0),
                 high: current,
                 low: current,
@@ -382,14 +375,12 @@ app.get('/api/stocks/:ticker/price-data', async (req, res) => {
 
         const prices = sourceRows.map(p => Number(p.price)).filter(Number.isFinite);
         const current = Number(sourceRows[sourceRows.length - 1]?.price ?? stock.price ?? 0);
-        const estimatedValue = marketServices.estimatedValueByTicker.get(ticker)
-            ?? marketServices.createEstimatedValueRange(current, marketServices.getCompanyProfile(ticker)?.archetype);
 
         res.json({
             name: stock.name,
             description: stock.description,
             current,
-            estimatedValue,
+            seedPrice: Number(stock.price ?? current),
             volume24h: Number(volumeRows[0]?.volume24h ?? 0),
             high: prices.length > 0 ? Math.max(...prices) : current,
             low: prices.length > 0 ? Math.min(...prices) : current,
@@ -597,7 +588,6 @@ const botManager = createBotManager({
     placeOrder: marketServices.placeOrder,
     cancelOrder: marketServices.cancelOrder,
     getDepth: marketServices.getDepth,
-    estimatedValueByTicker: marketServices.estimatedValueByTicker,
     userToSocket: websocket.userToSocket,
     logger: console
 });

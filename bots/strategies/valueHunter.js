@@ -1,12 +1,14 @@
-import { buildTakerLimitPrice, chooseOrderType, getDepthInfo, getReferencePrice, randomizeQuantity } from './shared.js';
+import { buildTakerLimitPrice, chooseOrderType, getDepthInfo, getNewsTickers, getReferencePrice, randomizeQuantity, roundPrice } from './shared.js';
 
 const MIN_VALUATION_BIAS = 0.04;
 const FULL_AGGRESSION_BIAS = 0.25;
+const SENTIMENT_VALUE_MOVE_PER_POINT = 0.0125;
 const MIN_MARKET_PROBABILITY = 0.05;
 const MAX_MARKET_PROBABILITY = 0.65;
 const MAX_OPEN_BUY_QUANTITY = 600;
 const MAX_NORMAL_QUANTITY = 60;
 const MAX_BARGAIN_QUANTITY = 500;
+const estimatedValueByTicker = new Map();
 
 function getAggression(absBias) {
     return Math.min(1, Math.max(0, (absBias - MIN_VALUATION_BIAS) / (
@@ -14,30 +16,35 @@ function getAggression(absBias) {
     )));
 }
 
-function getValuation(ticker, estimatedValueByTicker, getDepth) {
-    const estimatedValue = estimatedValueByTicker?.get?.(ticker);
-    if (!estimatedValue) return null;
+function updatePrivateEstimatedValues(news, getDepth) {
+    const sentiment = Number(news?.sentiment ?? 0);
+    if (!Number.isFinite(sentiment) || sentiment === 0) return;
 
-    const low = Number(estimatedValue.low ?? 0);
-    const high = Number(estimatedValue.high ?? 0);
+    for (const ticker of getNewsTickers(news)) {
+        const currentEstimate = estimatedValueByTicker.get(ticker);
+        const referencePrice = getReferencePrice(getDepth, ticker);
+        const baseValue = Number.isFinite(currentEstimate) && currentEstimate > 0
+            ? currentEstimate
+            : referencePrice;
+
+        if (!Number.isFinite(baseValue) || baseValue <= 0) continue;
+
+        const multiplier = Math.max(0.2, 1 + sentiment * SENTIMENT_VALUE_MOVE_PER_POINT);
+        estimatedValueByTicker.set(ticker, roundPrice(baseValue * multiplier));
+    }
+}
+
+function getPrivateValuationSignal(ticker, getDepth) {
+    const estimatedValue = Number(estimatedValueByTicker.get(ticker) ?? 0);
     const referencePrice = getReferencePrice(getDepth, ticker);
     if (
-        !Number.isFinite(low) || low <= 0
-        || !Number.isFinite(high) || high <= 0
+        !Number.isFinite(estimatedValue) || estimatedValue <= 0
         || !Number.isFinite(referencePrice) || referencePrice <= 0
     ) {
         return null;
     }
 
-    const estimatedLow = Math.min(low, high);
-    const estimatedHigh = Math.max(low, high);
-    if (referencePrice < estimatedLow) {
-        return { bias: (estimatedLow - referencePrice) / referencePrice };
-    }
-    if (referencePrice > estimatedHigh) {
-        return { bias: -((referencePrice - estimatedHigh) / referencePrice) };
-    }
-    return { bias: 0 };
+    return { bias: (estimatedValue - referencePrice) / referencePrice };
 }
 
 function getBuyQuantity(absBias, price, buyingPower) {
@@ -58,14 +65,19 @@ function getSellQuantity(absBias) {
     return randomizeQuantity(3 + aggression * 10, 1);
 }
 
-function onTick({ tickers, getDepth, getAvailableShares, getOpenOrderCount, getBuyingPower, estimatedValueByTicker }) {
+function onNews({ news, getDepth }) {
+    updatePrivateEstimatedValues(news, getDepth);
+    return [];
+}
+
+function onTick({ tickers, getDepth, getAvailableShares, getOpenOrderCount, getBuyingPower }) {
     const candidates = tickers
         .map((ticker) => {
-            const valuation = getValuation(ticker, estimatedValueByTicker, getDepth);
-            const absBias = Math.abs(valuation?.bias ?? 0);
+            const signal = getPrivateValuationSignal(ticker, getDepth);
+            const absBias = Math.abs(signal?.bias ?? 0);
             if (absBias < MIN_VALUATION_BIAS) return null;
 
-            const side = valuation.bias > 0 ? 'BUY' : 'SELL';
+            const side = signal.bias > 0 ? 'BUY' : 'SELL';
             if (side === 'BUY' && getOpenOrderCount(ticker, 'BUY') >= MAX_OPEN_BUY_QUANTITY) return null;
             if (side === 'SELL' && getAvailableShares(ticker) < 1) return null;
 
@@ -117,5 +129,6 @@ export default {
     intervalMs: 1400,
     backgroundFlow: false,
     positionRebalance: false,
+    onNews,
     onTick,
 };
