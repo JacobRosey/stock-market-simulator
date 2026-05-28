@@ -222,8 +222,21 @@ private:
         auto it = levels.find(price);
         if (it != levels.end())
         {
-            it->second += delta;
-            if (it->second <= 0)
+            if (delta < 0)
+            {
+                const uint64_t amountToRemove = static_cast<uint64_t>(-delta);
+                if (amountToRemove >= it->second)
+                {
+                    levels.erase(it);
+                    return;
+                }
+
+                it->second -= amountToRemove;
+                return;
+            }
+
+            it->second += static_cast<uint64_t>(delta);
+            if (it->second == 0)
             {
                 levels.erase(it);
             }
@@ -839,8 +852,8 @@ namespace OrderUtils
 
     void recoverFromRedis(MatchingEngine &engine, Redis &redis)
     {
-        uint64_t limitOrders;
-        uint64_t marketOrders;
+        uint64_t limitOrders = 0;
+        uint64_t marketOrders = 0;
 
         // Load all open orders from redis
         while (true)
