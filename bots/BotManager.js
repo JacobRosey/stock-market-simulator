@@ -6,6 +6,7 @@ const MICRO_UNIT = 1e6;
 const MIN_SENTIMENT = -10;
 const MAX_SENTIMENT = 10;
 const SENTIMENT_DECAY_INTERVAL_MS = 20_000;
+const BOT_STARTUP_GRACE_PERIOD_MS = 30_000;
 const MIN_SENTIMENT_ACTION_COOLDOWN_MS = 45_000;
 const MAX_SENTIMENT_ACTION_COOLDOWN_MS = 60_000;
 const LIMIT_ORDER_MAX_AGE_MS = 180_000;
@@ -932,6 +933,8 @@ export class BotManager {
         this.volume24hByTicker = new Map(BOT_TICKERS.map((ticker) => [ticker, 0]));
         this.lastTradeAtByTicker = new Map(BOT_TICKERS.map((ticker) => [ticker, 0]));
         this._sentimentDecayTimer = null;
+        this._resumeAfterGraceTimer = null;
+        this._startupGraceUntil = Date.now() + BOT_STARTUP_GRACE_PERIOD_MS;
         this._active = false;
     }
 
@@ -969,6 +972,20 @@ export class BotManager {
     resume() {
         if (this._active || this.runtimes.length === 0) return;
 
+        const graceRemainingMs = this._startupGraceUntil - Date.now();
+        if (graceRemainingMs > 0) {
+            if (!this._resumeAfterGraceTimer) {
+                this.logger.log(`Delaying bot runtime resume for ${Math.ceil(graceRemainingMs / 1000)}s startup grace period.`);
+                this._resumeAfterGraceTimer = setTimeout(() => {
+                    this._resumeAfterGraceTimer = null;
+                    if (this.userToSocket.size > 0) {
+                        this.resume();
+                    }
+                }, graceRemainingMs);
+            }
+            return;
+        }
+
         for (const runtime of this.runtimes) {
             runtime.startTicking();
         }
@@ -979,6 +996,11 @@ export class BotManager {
     }
 
     pause() {
+        if (this._resumeAfterGraceTimer) {
+            clearTimeout(this._resumeAfterGraceTimer);
+            this._resumeAfterGraceTimer = null;
+        }
+
         if (!this._active) return;
 
         for (const runtime of this.runtimes) {
@@ -995,9 +1017,9 @@ export class BotManager {
 
     async onNews(news) {
         if (!news) return;
-        this._applyNewsSentiment(news);
         if (!this._active) return;
 
+        this._applyNewsSentiment(news);
         const reactions = this.runtimes.map((runtime) => runtime.reactToNews(news));
         await Promise.all(reactions);
     }
