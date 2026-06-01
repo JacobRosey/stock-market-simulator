@@ -22,7 +22,7 @@ A real‑time multiplayer stock market simulation where users compete against ea
 | **Matching Engine** | C++17, Redis++, nlohmann/json |
 | **Backend** | Node.js, Express, Socket.IO, MySQL |
 | **Frontend** | React, TypeScript, Recharts |
-| **Infrastructure** | Redis (IPC), WebSockets, MySQL |
+| **IPC** | Redis, WebSockets |
  
 
 ---
