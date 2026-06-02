@@ -71,6 +71,18 @@ html, body, #root {
   height: calc(100vh - 140px);
 }
 
+.mobile-dashboard-tabs,
+.mobile-tab-panels,
+.mobile-tab-panel {
+  display: contents;
+}
+
+.mobile-tab-input,
+.mobile-tab-list,
+.news-panel {
+  display: none;
+}
+
 /* Left Column - Stack chart and ticker vertically */
 .left-column {
   display: flex;
@@ -121,4 +133,151 @@ html, body, #root {
 .right-column > * {
   width: 100%;
   height: 100%;
+}
+
+@media (max-width: 900px) {
+  html, body, #root {
+    height: auto;
+    min-height: 100dvh;
+    overflow-y: auto;
+  }
+
+  .dashboard-container {
+    min-height: 100dvh;
+    height: auto;
+    overflow: visible;
+  }
+
+  .dashboard-container > .headlines-banner {
+    display: none;
+  }
+
+  .main-content {
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    min-height: 0;
+    padding: 0.75rem;
+    gap: 0.75rem;
+  }
+
+  .left-column {
+    height: auto;
+    gap: 0.75rem;
+  }
+
+  .chart-container {
+    flex: none;
+    min-height: 440px;
+  }
+
+  .ticker-container {
+    height: auto;
+  }
+
+  .ticker-container > * {
+    height: auto;
+    gap: 0.75rem;
+  }
+
+  .mobile-dashboard-tabs {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-height: 0;
+  }
+
+  .mobile-tab-list {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.35rem;
+    padding: 0.35rem;
+    background: rgba(2, 6, 23, 0.94);
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+    backdrop-filter: blur(8px);
+  }
+
+  .mobile-tab-label {
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: #94a3b8;
+    font-size: 0.85rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .mobile-tab-panels {
+    display: block;
+    min-height: 0;
+  }
+
+  .mobile-tab-panel {
+    display: none;
+  }
+
+  #mobile-tab-trade:checked ~ .mobile-tab-list label[for="mobile-tab-trade"],
+  #mobile-tab-rankings:checked ~ .mobile-tab-list label[for="mobile-tab-rankings"],
+  #mobile-tab-news:checked ~ .mobile-tab-list label[for="mobile-tab-news"] {
+    background: #2563eb;
+    border-color: #3b82f6;
+    color: #ffffff;
+  }
+
+  #mobile-tab-trade:checked ~ .mobile-tab-panels .trade-panel,
+  #mobile-tab-rankings:checked ~ .mobile-tab-panels .rankings-panel,
+  #mobile-tab-news:checked ~ .mobile-tab-panels .news-panel {
+    display: block;
+  }
+
+  .middle-column,
+  .right-column {
+    height: auto;
+    min-height: 0;
+  }
+
+  .right-column {
+    min-height: 420px;
+  }
+
+  .mobile-news-panel {
+    min-height: 160px;
+    padding: 1rem;
+    background: #020617;
+    border: 1px solid #1e293b;
+    border-radius: 8px;
+  }
+
+  .mobile-news-panel .headlines-content {
+    grid-template-columns: 1fr;
+    align-content: start;
+    gap: 0.5rem;
+    height: 100%;
+  }
+
+  .mobile-news-panel .headlines-text {
+    white-space: normal;
+    overflow: visible;
+  }
+}
+
+@media (max-width: 520px) {
+  .headlines-banner {
+    margin-bottom: 0;
+  }
+
+  .main-content {
+    padding: 0.5rem;
+  }
+
+  .chart-container {
+    min-height: 400px;
+  }
 }

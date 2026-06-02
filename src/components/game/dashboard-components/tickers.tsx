@@ -22,6 +22,10 @@ const IMPACT_CLASSES = [
     'news-impact-negative',
 ];
 
+const getMobileSectorLabel = (sector: string) => (
+    sector.toLowerCase() === 'manufacturing' ? 'Mfg.' : sector
+);
+
 function clearImpactClasses(element: HTMLElement | null | undefined) {
     element?.classList.remove(...IMPACT_CLASSES);
 }
@@ -106,7 +110,12 @@ export default function TickerSelector({ selectedTicker, onSelectTicker }: Ticke
                 }}
                 className="sector-group"
             >
-                <h4 className="sector-title">{sector}</h4>
+                <h4 className="sector-title">
+                    <span className="sector-title-full">{sector}</span>
+                    <span className="sector-title-mobile">
+                        {getMobileSectorLabel(sector)}
+                    </span>
+                </h4>
                 <div className="sector-buttons">
                     {stocks.map((stock) => (
                         <button

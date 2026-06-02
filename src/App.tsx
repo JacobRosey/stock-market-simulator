@@ -7,6 +7,7 @@ import Register from './components/auth/register'
 import Dashboard from './components/game/dashboard'
 import Portfolio from './components/game/portfolio'
 import Orders from './components/game/orders'
+import './App.css'
 
 function App() {
   const { loading } = useAuth()

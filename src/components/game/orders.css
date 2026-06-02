@@ -141,20 +141,52 @@
 }
 
 @media (max-width: 768px) {
+    .orders-container {
+        min-height: 100dvh;
+        height: auto;
+    }
+
     .open-orders {
         padding: 1rem;
+    }
+
+    .open-orders h2 {
+        margin-bottom: 1rem;
+        font-size: 1.25rem;
     }
     
     .table-container {
         overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
     }
     
     .open-orders table {
-        min-width: 800px;
+        min-width: 720px;
+    }
+
+    .open-orders th,
+    .open-orders td {
+        padding: 0.75rem 0.6rem;
+        white-space: nowrap;
     }
     
     .cancel-btn {
+        min-height: 36px;
         padding: 0.4rem 0.8rem;
         font-size: 0.8rem;
+    }
+
+    .open-orders > p {
+        padding: 2rem 1rem;
+    }
+}
+
+@media (max-width: 420px) {
+    .open-orders {
+        padding: 0.75rem 0.5rem;
+    }
+
+    .open-orders table {
+        min-width: 680px;
     }
 }

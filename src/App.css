@@ -14,3 +14,82 @@ body {
   text-align: center;
 }
 
+html,
+body,
+#root {
+  width: 100%;
+  min-width: 320px;
+  min-height: 100%;
+}
+
+body {
+  background: #0f172a;
+}
+
+.top-nav a,
+.top-nav button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #e5e7eb;
+  text-decoration: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.top-nav a:hover,
+.top-nav button:hover {
+  color: #3b82f6;
+}
+
+@media (max-width: 640px) {
+  html,
+  body,
+  #root {
+    height: auto;
+    min-height: 100dvh;
+    overflow-x: hidden;
+  }
+
+  #root {
+    text-align: left;
+  }
+
+  .top-nav {
+    height: auto;
+    min-height: 64px;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    align-content: center;
+  }
+
+  .title {
+    flex: 0 0 100%;
+    margin-right: 0;
+    font-size: 1.25rem;
+    line-height: 1.1;
+  }
+
+  .top-nav a,
+  .top-nav button {
+    margin-left: 0;
+    min-height: 36px;
+    padding: 0.35rem 0.65rem;
+    border: 1px solid #1e293b;
+    border-radius: 6px;
+    background: #0f172a;
+    font-size: 0.85rem;
+  }
+
+  .headlines-banner {
+    width: calc(100% - 1rem);
+    height: auto;
+    min-height: 58px;
+    margin: 0.5rem auto 0;
+    padding: 0.55rem 0.75rem;
+  }
+}

@@ -207,3 +207,119 @@
   pointer-events: none;
   z-index: 999;
 }
+
+@media (max-width: 900px) {
+  .stock-chart-container {
+    padding: 0.85rem;
+    min-height: 400px;
+  }
+
+  .chart-header {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 0.75rem;
+    align-items: start;
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.75rem;
+  }
+
+  .header-left {
+    min-width: 0;
+  }
+
+  .ticker-section h2,
+  .current-price {
+    font-size: 1.25rem;
+  }
+
+  .daily-stats {
+    grid-column: 1 / -1;
+    order: 3;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.4rem;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .stat {
+    min-width: 0;
+    padding: 0.45rem;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+  }
+
+  .stat-label {
+    font-size: 0.62rem;
+    letter-spacing: 0;
+  }
+
+  .stat-value {
+    font-size: 0.78rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .price-info {
+    min-width: 0;
+    max-width: 150px;
+  }
+
+  .price-change {
+    font-size: 0.75rem;
+    line-height: 1.25;
+  }
+
+  .company-info-panel {
+    position: fixed;
+    top: 8.5rem;
+    left: 1rem;
+    right: 1rem;
+    width: auto;
+    max-height: 45vh;
+    overflow-y: auto;
+    margin: 0;
+  }
+
+  .company-info-panel::before {
+    display: none;
+  }
+
+  .chart-graphic {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .range-selector {
+    position: static;
+    order: 2;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.35rem;
+    width: 100%;
+    padding: 0.35rem;
+  }
+
+  .range-selector button {
+    min-height: 34px;
+    padding: 0.35rem 0.25rem;
+  }
+}
+
+@media (max-width: 420px) {
+  .stock-chart-container {
+    padding: 0.65rem;
+  }
+
+  .chart-header {
+    grid-template-columns: 1fr;
+  }
+
+  .price-info {
+    max-width: none;
+    text-align: left;
+  }
+}

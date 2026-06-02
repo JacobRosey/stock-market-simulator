@@ -145,3 +145,22 @@ body {
   border-radius: 8px;
   font-size: 0.85rem;
 }
+
+@media (max-width: 480px) {
+  .auth-page {
+    min-height: 100dvh;
+    width: 100%;
+    padding: 1rem;
+    align-items: stretch;
+  }
+
+  .auth-card {
+    align-self: center;
+    padding: 1.25rem;
+    max-width: 100%;
+  }
+
+  .auth-card h1 {
+    font-size: 2rem;
+  }
+}

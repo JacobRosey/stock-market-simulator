@@ -63,13 +63,53 @@ export default function Dashboard() {
                     </div>
                 </div>
 
-                <div className="middle-column">
-                    <OrderBook selectedTicker={selectedTicker} />
-                </div>
+                <section className="mobile-dashboard-tabs" aria-label="Dashboard panels">
+                    <input
+                        className="mobile-tab-input"
+                        type="radio"
+                        name="dashboard-mobile-panel"
+                        id="mobile-tab-trade"
+                        defaultChecked
+                    />
+                    <input
+                        className="mobile-tab-input"
+                        type="radio"
+                        name="dashboard-mobile-panel"
+                        id="mobile-tab-rankings"
+                    />
+                    <input
+                        className="mobile-tab-input"
+                        type="radio"
+                        name="dashboard-mobile-panel"
+                        id="mobile-tab-news"
+                    />
 
-                <div className="right-column">
-                    <Leaderboard />
-                </div>
+                    <div className="mobile-tab-list" role="tablist" aria-label="Dashboard sections">
+                        <label htmlFor="mobile-tab-trade" className="mobile-tab-label">Trade</label>
+                        <label htmlFor="mobile-tab-rankings" className="mobile-tab-label">Rankings</label>
+                        <label htmlFor="mobile-tab-news" className="mobile-tab-label">News</label>
+                    </div>
+
+                    <div className="mobile-tab-panels">
+                        <div className="mobile-tab-panel trade-panel">
+                            <div className="middle-column">
+                                <OrderBook selectedTicker={selectedTicker} />
+                            </div>
+                        </div>
+
+                        <div className="mobile-tab-panel rankings-panel">
+                            <div className="right-column">
+                                <Leaderboard />
+                            </div>
+                        </div>
+
+                        <div className="mobile-tab-panel news-panel">
+                            <div className="mobile-news-panel">
+                                <Headlines />
+                            </div>
+                        </div>
+                    </div>
+                </section>
             </div>
         </div>
     )

@@ -35,8 +35,22 @@ if (allowedOrigins.length === 0) {
     allowedOrigins.push('http://localhost:5173');
 }
 
+const isLocalDevelopmentOrigin = (origin) => {
+    if (isProduction || !origin) return false;
+
+    try {
+        const url = new URL(origin);
+        return (
+            (url.hostname === 'localhost' || url.hostname === '127.0.0.1')
+            && (url.protocol === 'http:' || url.protocol === 'https:')
+        );
+    } catch {
+        return false;
+    }
+};
+
 const corsOrigin = (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (!origin || allowedOrigins.includes(origin) || isLocalDevelopmentOrigin(origin)) {
         return callback(null, true);
     }
 

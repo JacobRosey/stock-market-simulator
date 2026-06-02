@@ -179,3 +179,43 @@
 .leaderboard-cards::-webkit-scrollbar-thumb:hover {
     background: #374151;
 }
+
+@media (max-width: 900px) {
+    .leaderboard {
+        height: auto;
+        min-height: 420px;
+        padding: 0.85rem;
+    }
+
+    .leaderboard-header {
+        margin-bottom: 0.75rem;
+        padding-bottom: 0.6rem;
+    }
+
+    .leaderboard-cards {
+        max-height: 62vh;
+    }
+
+    .leaderboard-card {
+        min-height: 56px;
+        padding: 0.65rem;
+    }
+
+    .card-rank {
+        width: 2rem;
+    }
+
+    .card-avatar {
+        width: 1.8rem;
+        height: 1.8rem;
+        margin-right: 0.55rem;
+    }
+}
+
+@media (max-width: 420px) {
+    .card-info {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 0.15rem;
+    }
+}
