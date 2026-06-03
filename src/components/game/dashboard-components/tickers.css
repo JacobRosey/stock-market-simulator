@@ -78,6 +78,11 @@
   box-shadow: 0 0 0 1px rgba(252, 165, 165, 0.22), 0 0 14px rgba(248, 113, 113, 0.34);
 }
 
+.mobile-ticker-select-label,
+.mobile-ticker-select {
+  display: none;
+}
+
 .sector-group {
   display: flex;
   flex-direction: column;
@@ -143,61 +148,44 @@
 
 @media (max-width: 900px) {
   .ticker-selector {
-    display: grid;
-    grid-auto-flow: column;
-    grid-auto-columns: minmax(132px, 42vw);
-    grid-template-columns: none;
-    grid-template-rows: none;
-    gap: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
     max-height: none;
-    overflow-x: auto;
-    overflow-y: hidden;
+    overflow: visible;
     padding: 0.75rem;
     border-radius: 8px;
-    scroll-snap-type: x proximity;
-    -webkit-overflow-scrolling: touch;
   }
 
-  .sector-group {
-    min-width: 0;
-    margin-top: 0;
-    padding: 0.35rem;
-    scroll-snap-align: start;
-    text-align: left;
-    font-size: 0.85rem;
-  }
-
-  .sector-title {
-    min-height: 1.4rem;
-    margin-bottom: 0.35rem;
+  .mobile-ticker-select-label {
+    display: block;
+    color: #94a3b8;
     font-size: 0.72rem;
-    line-height: 1.2;
+    font-weight: 700;
+    line-height: 1;
     text-transform: uppercase;
   }
 
-  .sector-title-full {
+  .mobile-ticker-select {
+    display: block;
+    width: 100%;
+    min-height: 44px;
+    padding: 0 2.5rem 0 0.75rem;
+    color: #e5e7eb;
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    font-size: 0.92rem;
+    font-weight: 700;
+  }
+
+  .sector-group {
     display: none;
-  }
-
-  .sector-title-mobile {
-    display: inline;
-  }
-
-  .sector-buttons {
-    display: grid;
-    gap: 0.35rem;
-  }
-
-  .ticker-selector button {
-    min-height: 36px;
-    margin-top: 0;
-    padding: 0.45rem 0.35rem;
-    font-size: 0.72rem;
   }
 }
 
 @media (max-width: 420px) {
   .ticker-selector {
-    grid-auto-columns: minmax(120px, 52vw);
+    padding: 0.65rem;
   }
 }

@@ -31,6 +31,26 @@ function formatVolume(value: number) {
   });
 }
 
+function useMediaQuery(query: string) {
+  const [matches, setMatches] = useState(() => (
+    typeof window === 'undefined' ? false : window.matchMedia(query).matches
+  ));
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const mediaQuery = window.matchMedia(query);
+    const handleChange = () => setMatches(mediaQuery.matches);
+
+    handleChange();
+    mediaQuery.addEventListener('change', handleChange);
+
+    return () => mediaQuery.removeEventListener('change', handleChange);
+  }, [query]);
+
+  return matches;
+}
+
 function PositionLineLabel({ viewBox, label }: { viewBox?: any; label: string }) {
   if (!viewBox) return null;
 
@@ -64,6 +84,7 @@ export default function Chart({ ticker }: ChartProps) {
   const [history, setHistory] = useState<PricePoint[]>([]);
   const [showInfo, setShowInfo] = useState(false);
   const [range, setRange] = useState('1m');
+  const isCompactChart = useMediaQuery('(max-width: 520px)');
   const ranges = ['1m', '5m', '1h', '1d'];
   const volumeDeltaBaselineRef = useRef(0);
 
@@ -304,40 +325,53 @@ export default function Chart({ ticker }: ChartProps) {
       </div>
 
       <div className="chart-graphic">
-        <ResponsiveContainer width="100%" height={400}>
-          <LineChart data={history}>
-            <XAxis
-              dataKey="timestamp"
-              tickFormatter={formatXAxis}
-            />
-            <YAxis
-              domain={priceDomain}
-              tickFormatter={(price: number) => `$${formatMoney(price)}`}
-            />
-            <Tooltip
-              labelFormatter={(ts: any) => new Date(ts).toLocaleString()}
-              formatter={(price: any) => [`$${price}`, 'Price']}
-            />
-            <Line
-              type="monotone"
-              dataKey="price"
-              stroke="#8884d8"
-              dot={false}
-              isAnimationActive={true}
-              animationDuration={300}
-            />
-            {position && positionLabel && positionLineY !== null && (
-              <ReferenceLine
-                y={positionLineY}
-                stroke="#0f766e"
-                strokeDasharray="6 5"
-                strokeWidth={2}
-                ifOverflow="visible"
-                label={<PositionLineLabel label={positionLabel} />}
+        <div className="chart-plot">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart
+              data={history}
+              margin={isCompactChart
+                ? { top: 12, right: 6, bottom: 2, left: -18 }
+                : { top: 16, right: 20, bottom: 8, left: 0 }}
+            >
+              <XAxis
+                dataKey="timestamp"
+                tickFormatter={formatXAxis}
+                interval="preserveStartEnd"
+                minTickGap={isCompactChart ? 32 : 16}
+                tickMargin={isCompactChart ? 6 : 8}
+                tick={{ fontSize: isCompactChart ? 10 : 12 }}
               />
-            )}
-          </LineChart>
-        </ResponsiveContainer>
+              <YAxis
+                domain={priceDomain}
+                width={isCompactChart ? 46 : 60}
+                tickFormatter={(price: number) => `$${formatMoney(price)}`}
+                tick={{ fontSize: isCompactChart ? 10 : 12 }}
+              />
+              <Tooltip
+                labelFormatter={(ts: any) => new Date(ts).toLocaleString()}
+                formatter={(price: any) => [`$${price}`, 'Price']}
+              />
+              <Line
+                type="monotone"
+                dataKey="price"
+                stroke="#8884d8"
+                dot={false}
+                isAnimationActive={true}
+                animationDuration={300}
+              />
+              {position && positionLabel && positionLineY !== null && (
+                <ReferenceLine
+                  y={positionLineY}
+                  stroke="#0f766e"
+                  strokeDasharray="6 5"
+                  strokeWidth={2}
+                  ifOverflow="visible"
+                  label={<PositionLineLabel label={positionLabel} />}
+                />
+              )}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
         <div className="range-selector">
           {ranges.map(r => (
             <button

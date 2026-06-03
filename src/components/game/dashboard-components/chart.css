@@ -150,6 +150,12 @@
     min-height: 0;
 }
 
+.chart-plot {
+  width: 100%;
+  height: min(400px, 100%);
+  min-height: 260px;
+}
+
 .range-selector {
   position: absolute;
   top: -20px;
@@ -293,6 +299,11 @@
     gap: 0.5rem;
   }
 
+  .chart-plot {
+    height: 300px;
+    min-height: 0;
+  }
+
   .range-selector {
     position: static;
     order: 2;
@@ -321,5 +332,9 @@
   .price-info {
     max-width: none;
     text-align: left;
+  }
+
+  .chart-plot {
+    height: 240px;
   }
 }

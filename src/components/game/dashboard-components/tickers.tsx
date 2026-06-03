@@ -96,8 +96,25 @@ export default function TickerSelector({ selectedTicker, onSelectTicker }: Ticke
         };
     }, [latestNews, groupedBySector]);
 
+    const stocks = Object.values(groupedBySector).flat();
+
     return (
     <div ref={selectorRef} className="ticker-selector">
+        <label className="mobile-ticker-select-label" htmlFor="mobile-ticker-select">
+            Ticker
+        </label>
+        <select
+            id="mobile-ticker-select"
+            className="mobile-ticker-select"
+            value={selectedTicker}
+            onChange={(event) => onSelectTicker(event.target.value as Ticker)}
+        >
+            {stocks.map((stock) => (
+                <option key={stock.ticker} value={stock.ticker}>
+                    {stock.ticker} - {stock.name}
+                </option>
+            ))}
+        </select>
         {Object.entries(groupedBySector).map(([sector, stocks]) => (
             <div
                 key={sector}
