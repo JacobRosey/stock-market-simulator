@@ -90,6 +90,12 @@
     font-size: 0.95rem;
 }
 
+@media (min-width: 769px) {
+    .open-orders td {
+        text-align: left;
+    }
+}
+
 .open-orders tbody tr:hover {
     background: #2d3b4f;
     transition: background 0.2s ease;
