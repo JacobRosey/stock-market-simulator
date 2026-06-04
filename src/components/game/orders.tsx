@@ -7,11 +7,12 @@ import './orders.css';
 export default function Orders() {
     const { logout } = useAuth();
     const { attemptOrderCancellation, userOrders, ordersLoading } = useWebSocket();
-    const canCancelOrder = (status: string) => (
+    const canCancelOrder = (status: string, type: OrderType) => (
         status !== 'FILLED'
         && status !== 'REJECTED'
         && status !== 'CANCELED'
         && status !== 'CANCELLED'
+        && type !== 'MARKET'
     );
 
     if (ordersLoading) return <div>Loading...</div>;
@@ -66,7 +67,7 @@ export default function Orders() {
                                         <td>{order.filledQuantity}</td>
                                         <td>{order.status}</td>
                                         <td>
-                                            {canCancelOrder(order.status) && (
+                                            {canCancelOrder(order.status, order.type) && (
                                                 <button
                                                     onClick={() => cancelOrder(order.orderId, order.ticker, order.type, order.side)}
                                                     className="cancel-btn"
