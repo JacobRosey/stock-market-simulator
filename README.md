@@ -25,9 +25,13 @@ A real‑time multiplayer stock market simulation where users compete against ea
 | **IPC** | Redis, WebSockets |
  
 
+
 ---
 
 ## Architecture
+
+<img width="1832" height="555" alt="Screenshot (529)" src="https://github.com/user-attachments/assets/af06563d-9faa-4dec-9627-157d8bda7783" />
+
 
 ### Matching Engine (C++)
 The core of the system is a multi-threaded matching engine that processes limit orders, market orders, and order cancellation.
