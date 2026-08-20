@@ -9,6 +9,12 @@ export function roundPrice(price) {
     return Math.max(0.01, Math.round(price * 100) / 100);
 }
 
+function getPositiveLevelPrices(levels) {
+    return (Array.isArray(levels) ? levels : [])
+        .map((level) => Number(level?.price))
+        .filter((price) => Number.isFinite(price) && price > 0);
+}
+
 export function clamp(value, min, max) {
     return Math.min(max, Math.max(min, value));
 }
@@ -67,8 +73,10 @@ export function clampSentiment(sentiment) {
 
 export function getDepthInfo(getDepth, ticker) {
     const depth = getDepth(ticker);
-    const bestBid = depth?.bids?.[0]?.price ?? null;
-    const bestAsk = depth?.asks?.[0]?.price ?? null;
+    const bidPrices = getPositiveLevelPrices(depth?.bids);
+    const askPrices = getPositiveLevelPrices(depth?.asks);
+    const bestBid = bidPrices.length > 0 ? Math.max(...bidPrices) : null;
+    const bestAsk = askPrices.length > 0 ? Math.min(...askPrices) : null;
 
     let mid = depth?.lastPrice ?? null;
     if (Number.isFinite(bestBid) && Number.isFinite(bestAsk)) {
@@ -86,14 +94,32 @@ export function getReferencePrice(getDepth, ticker) {
     const { bestBid, bestAsk, mid, depth } = getDepthInfo(getDepth, ticker);
     const lastPrice = Number(depth?.lastPrice ?? 0);
     const hasLastPrice = Number.isFinite(lastPrice) && lastPrice > 0;
-    const hasTwoSidedBook = Number.isFinite(bestBid) && bestBid > 0 && Number.isFinite(bestAsk) && bestAsk > 0;
+    const hasBestBid = Number.isFinite(bestBid) && bestBid > 0;
+    const hasBestAsk = Number.isFinite(bestAsk) && bestAsk > 0;
+    const hasTwoSidedBook = hasBestBid && hasBestAsk;
 
     if (hasTwoSidedBook && Number.isFinite(mid) && mid > 0) {
         const spread = bestAsk - bestBid;
-        const spreadRatio = hasLastPrice ? spread / lastPrice : 0;
-        if (spread > 0 && (!hasLastPrice || spreadRatio <= 0.05)) {
+        const spreadRatio = spread / mid;
+        if (spread > 0 && spreadRatio <= 0.05) {
             return mid;
         }
+
+        if (hasLastPrice && lastPrice < bestBid) {
+            return bestBid;
+        }
+
+        if (hasLastPrice && lastPrice > bestAsk) {
+            return bestAsk;
+        }
+    }
+
+    if (hasLastPrice && hasBestAsk && !hasBestBid && lastPrice < bestAsk * 0.5) {
+        return bestAsk;
+    }
+
+    if (hasLastPrice && hasBestBid && !hasBestAsk && lastPrice > bestBid * 1.5) {
+        return bestBid;
     }
 
     if (hasLastPrice) {
@@ -104,11 +130,11 @@ export function getReferencePrice(getDepth, ticker) {
         return mid;
     }
 
-    if (Number.isFinite(bestBid) && bestBid > 0) {
+    if (hasBestBid) {
         return bestBid;
     }
 
-    if (Number.isFinite(bestAsk) && bestAsk > 0) {
+    if (hasBestAsk) {
         return bestAsk;
     }
 

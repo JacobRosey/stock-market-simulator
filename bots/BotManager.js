@@ -533,6 +533,12 @@ class BotRuntime {
             const isStopLoss = gainPercent <= -EXIT_TRIGGER_STEP;
             if (!isTakeProfit && !isStopLoss) continue;
 
+            const bestBid = Number(depthInfo.bestBid ?? 0);
+            if (isStopLoss && (!Number.isFinite(bestBid) || bestBid <= 0)) {
+                this.exitCooldownUntilByTicker.set(ticker, now + EXIT_CHECK_COOLDOWN_MS);
+                continue;
+            }
+
             this.logger.info(
                 `[bot-exit-signal] ${this.username} ${ticker}`
                 + ` averageCost=${averageCost.toFixed(2)}`
@@ -569,8 +575,9 @@ class BotRuntime {
             const quantity = Math.floor(desiredQuantity);
             if (quantity < 1) continue;
 
+            const exitPriceBase = isStopLoss ? bestBid : referencePrice;
             const priceOffset = isTakeProfit ? TAKE_PROFIT_LIMIT_OFFSET : -STOP_LOSS_LIMIT_OFFSET;
-            const price = roundPrice(referencePrice + priceOffset);
+            const price = roundPrice(exitPriceBase + priceOffset);
             if (!price) continue;
 
             this.exitCooldownUntilByTicker.set(ticker, now + EXIT_CHECK_COOLDOWN_MS);
@@ -603,11 +610,6 @@ class BotRuntime {
     }
 
     _getValuationPrice(ticker) {
-        const lastPrice = Number(this.getDepth(ticker)?.lastPrice ?? 0);
-        if (Number.isFinite(lastPrice) && lastPrice > 0) {
-            return lastPrice;
-        }
-
         return getReferencePrice(this.getDepth, ticker);
     }
 

@@ -661,9 +661,8 @@ public:
         j["asks"] = json::array();
         j["bids"] = json::array();
 
-        for (auto it = snap.topAsks.rbegin(); it != snap.topAsks.rend(); ++it){
-            j["asks"].push_back({{"price", it->price }, {"quantity", it->totalQuantity }});
-        }
+        for (auto &l : snap.topAsks)
+            j["asks"].push_back({{"price", l.price }, {"quantity", l.totalQuantity }});
 
         for (auto &l : snap.topBids)
             j["bids"].push_back({{"price", l.price  }, {"quantity", l.totalQuantity  }});
