@@ -42,5 +42,14 @@ export default function ToastMessages() {
         );
     }
 
+    if (toast.status === 'CANCEL_FAILED') {
+        return (
+            <div className="toast toast-fail">
+                Cancel failed: {toast.reason}.
+                <button onClick={clearToast}>x</button>
+            </div>
+        );
+    }
+
     return null;
 }

@@ -195,6 +195,80 @@ public:
     }
 };
 
+enum class EngineCommandType
+{
+    ADD_ORDER,
+    CANCEL_ORDER
+};
+
+struct CancelRequest
+{
+    uint64_t orderId = 0;
+    std::string userId;
+    std::string ticker;
+    std::string side;
+};
+
+struct EngineCommand
+{
+    EngineCommandType type;
+    std::optional<Order> order;
+    CancelRequest cancel;
+
+    static EngineCommand addOrder(const Order &o)
+    {
+        EngineCommand command{EngineCommandType::ADD_ORDER};
+        command.order.emplace(o);
+        return command;
+    }
+
+    static EngineCommand cancelOrder(uint64_t orderId, std::string userId, std::string ticker, std::string side)
+    {
+        EngineCommand command{EngineCommandType::CANCEL_ORDER};
+        command.cancel = {orderId, std::move(userId), std::move(ticker), std::move(side)};
+        return command;
+    }
+};
+
+class CancelledOrderResult
+{
+public:
+    uint64_t orderId;
+    std::string userId;
+    std::string ticker;
+    std::string side;
+    bool success;
+    std::string reason;
+    uint64_t timestamp;
+
+    explicit CancelledOrderResult(uint64_t orderId, std::string userId, std::string ticker, std::string side, bool success, std::string reason)
+        : orderId(orderId),
+          userId(std::move(userId)),
+          ticker(std::move(ticker)),
+          side(std::move(side)),
+          success(success),
+          reason(std::move(reason)),
+          timestamp(getTimestamp()) {}
+
+    json toJson() const
+    {
+        return {
+            {"orderId", orderId},
+            {"userId", userId},
+            {"ticker", ticker},
+            {"side", side},
+            {"success", success},
+            {"reason", reason},
+            {"timestamp", timestamp}};
+    }
+};
+
+struct DepthPublication
+{
+    std::string ticker;
+    DepthSnapshot snapshot;
+};
+
 class OrderBook
 {
 private:
@@ -397,14 +471,18 @@ private:
         "GMED", "BIOV", "GENH", "NEURO"};
 
     std::array<OrderBook, 20> books;
-    std::array<std::mutex, 20> bookMutexes;
     std::unordered_map<std::string, size_t> tickerToIndex;
-    std::unordered_map<std::string, uint64_t> tickerPrices;
+    std::array<std::queue<EngineCommand>, 20> inboundQueues;
+    std::array<std::mutex, 20> inboundMutexes;
     std::queue<FilledOrder> fillQueue;
     std::queue<RejectedOrder> rejectedQueue;
+    std::queue<CancelledOrderResult> cancelResultQueue;
+    std::queue<DepthPublication> depthQueue;
     std::mutex fillMutex;
     std::condition_variable fillCV;
     std::mutex rejectedMutex;
+    std::mutex cancelResultMutex;
+    std::mutex depthMutex;
     Redis redis;
 
 public:
@@ -414,17 +492,70 @@ public:
         {
             tickerToIndex[TICKERS[i]] = i; // Populate ticker->index map
 
-            tickerPrices[TICKERS[i]] = 0.0;
         }
     }
 
-    std::tuple<OrderBook &, std::mutex &> getBookAndMutex(std::string t)
+    std::optional<size_t> getTickerIndex(const std::string &ticker) const
     {
-        int idx = tickerToIndex[t];
-        auto &book = books[idx];
-        auto &mutex = bookMutexes[idx];
+        auto it = tickerToIndex.find(ticker);
+        if (it == tickerToIndex.end())
+            return std::nullopt;
 
-        return std::tuple<OrderBook &, std::mutex &>(book, mutex);
+        return it->second;
+    }
+
+    OrderBook &getBookForTicker(const std::string &ticker)
+    {
+        return books[getTickerIndex(ticker).value()];
+    }
+
+    bool enqueueOrder(const Order &order)
+    {
+        auto idx = getTickerIndex(order.ticker);
+        if (!idx)
+        {
+            std::vector<RejectedOrder> rejections;
+            rejections.emplace_back(order.orderId, order.userId, order.ticker, order.side, order.remainingQuantity, "Unknown ticker");
+            enqueueRejections(rejections);
+            return false;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(inboundMutexes[*idx]);
+            inboundQueues[*idx].push(EngineCommand::addOrder(order));
+        }
+        return true;
+    }
+
+    bool enqueueCancellation(uint64_t orderId, std::string userId, std::string ticker, std::string side)
+    {
+        auto idx = getTickerIndex(ticker);
+        if (!idx)
+        {
+            std::vector<CancelledOrderResult> results;
+            results.emplace_back(orderId, std::move(userId), std::move(ticker), std::move(side), false, "Unknown ticker");
+            enqueueCancelResults(results);
+            return false;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(inboundMutexes[*idx]);
+            inboundQueues[*idx].push(EngineCommand::cancelOrder(orderId, std::move(userId), std::move(ticker), std::move(side)));
+        }
+        return true;
+    }
+
+    std::vector<EngineCommand> drainInboundForTicker(size_t idx)
+    {
+        std::lock_guard<std::mutex> lock(inboundMutexes[idx]);
+
+        std::vector<EngineCommand> commands;
+        while (!inboundQueues[idx].empty())
+        {
+            commands.push_back(std::move(inboundQueues[idx].front()));
+            inboundQueues[idx].pop();
+        }
+        return commands;
     }
 
     void enqueueFills(std::vector<FilledOrder> &fills)
@@ -448,6 +579,23 @@ public:
             for (auto &r : rejections)
                 rejectedQueue.push(std::move(r));
         }
+    }
+
+    void enqueueCancelResults(std::vector<CancelledOrderResult> &results)
+    {
+        if (results.empty())
+            return;
+        {
+            std::lock_guard<std::mutex> lock(cancelResultMutex);
+            for (auto &r : results)
+                cancelResultQueue.push(std::move(r));
+        }
+    }
+
+    void enqueueDepthSnapshot(std::string ticker, DepthSnapshot snap)
+    {
+        std::lock_guard<std::mutex> lock(depthMutex);
+        depthQueue.push({std::move(ticker), std::move(snap)});
     }
 
     // Blocks until the we have maxBatch fills in fill queue or timeout, returns batch of filled orders
@@ -479,6 +627,32 @@ public:
         return batch;
     }
 
+    std::vector<CancelledOrderResult> drainCancelResults(size_t maxBatch)
+    {
+        std::lock_guard<std::mutex> lock(cancelResultMutex);
+
+        std::vector<CancelledOrderResult> batch;
+        while (!cancelResultQueue.empty() && batch.size() < maxBatch)
+        {
+            batch.push_back(std::move(cancelResultQueue.front()));
+            cancelResultQueue.pop();
+        }
+        return batch;
+    }
+
+    std::vector<DepthPublication> drainDepthSnapshots(size_t maxBatch)
+    {
+        std::lock_guard<std::mutex> lock(depthMutex);
+
+        std::vector<DepthPublication> batch;
+        while (!depthQueue.empty() && batch.size() < maxBatch)
+        {
+            batch.push_back(std::move(depthQueue.front()));
+            depthQueue.pop();
+        }
+        return batch;
+    }
+
     void publishDepthForTicker(Redis &r, const std::string &ticker, const DepthSnapshot &snap, const std::unordered_map<std::string, uint64_t> &tickerPrices)
     {                  
         json j;
@@ -500,65 +674,44 @@ public:
         r.publish(channel, message);
     }
 
-    void addMarketOrder(const Order &order)
+    void applyOrderToBook(OrderBook &book, const Order &order)
     {
-
-        auto [book, mutex] = getBookAndMutex(order.ticker);
-
+        if (order.side == Side::BUY)
         {
-            std::lock_guard<std::mutex> lock(mutex);
-            if (order.side == Side::BUY)
-            {
-                book.addBid(order);
-            }
-            else
-            {
-                book.addAsk(order);
-            }
+            book.addBid(order);
+        }
+        else
+        {
+            book.addAsk(order);
         }
     }
 
-    void addLimitOrder(const Order &order)
+    void applyInboundForTicker(size_t idx, OrderBook &book, std::vector<CancelledOrderResult> &cancelResults)
     {
-
-        auto [book, mutex] = getBookAndMutex(order.ticker);
-
+        auto commands = drainInboundForTicker(idx);
+        for (auto &command : commands)
         {
-            std::lock_guard<std::mutex> lock(mutex);
-            
-            if (order.side == Side::BUY)
+            if (command.type == EngineCommandType::ADD_ORDER)
             {
-                book.addBid(order);
+                if (command.order)
+                    applyOrderToBook(book, *command.order);
+                continue;
             }
-            else
-            {
-                book.addAsk(order);
-            }
+
+            const auto &cancel = command.cancel;
+            const bool success = book.attemptOrderCancellation(cancel.orderId, cancel.side);
+            cancelResults.emplace_back(
+                cancel.orderId,
+                cancel.userId,
+                cancel.ticker,
+                cancel.side,
+                success,
+                success ? "" : "Order not found in book");
         }
     }
 
-    bool cancelOrder(const uint64_t orderId, const std::string ticker, const std::string side)
+    void matchMarketOrdersForTicker(const std::string &ticker, OrderBook &book, std::vector<FilledOrder> &filledOrders, std::vector<RejectedOrder> &rejectedOrders)
     {
-        auto [book, mutex] = getBookAndMutex(ticker);
-
-        bool success;
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            success = book.attemptOrderCancellation(orderId, side);
-        }
-        return success;
-    }
-
-    void matchMarketOrdersForTicker(const std::string &ticker)
-    {
-        auto [book, mutex] = getBookAndMutex(ticker);
-
-        std::vector<FilledOrder> filledOrders;
-        std::vector<RejectedOrder> rejectedOrders;
-
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-
             while (!book.getMarketAsks().empty())
             {
                 Order marketAsk = book.popMarketAsk();
@@ -689,10 +842,6 @@ public:
                         rejectionReason);
                 }
             }
-        }
-
-        enqueueFills(filledOrders);
-        enqueueRejections(rejectedOrders);
     }
 
     void matchWithIterators(OrderBook &book, std::set<Order, Order::CompareBids>::iterator bidIt, std::set<Order, Order::CompareAsks>::iterator askIt, std::vector<FilledOrder> &filledOrders)
@@ -728,14 +877,8 @@ public:
             book.addAsk(ask);
     }
 
-    void matchLimitOrdersForTicker(const std::string &ticker)
+    void matchLimitOrdersForTicker(const std::string &ticker, OrderBook &book, std::vector<FilledOrder> &filledOrders)
     {
-        std::vector<FilledOrder> filledOrders;
-        auto [book, mutex] = getBookAndMutex(ticker);
-
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-
             while (book.canFillLimitOrders())
             {
                 auto bidIt = book.getLimitBids().begin();
@@ -774,41 +917,31 @@ public:
                 }
                 matchWithIterators(book, bidIt, askIt, filledOrders);
             }
-        }
+    }
+
+    void processTicker(size_t idx)
+    {
+        const std::string ticker = TICKERS[idx];
+        auto &book = books[idx];
+
+        std::vector<FilledOrder> filledOrders;
+        std::vector<RejectedOrder> rejectedOrders;
+        std::vector<CancelledOrderResult> cancelResults;
+
+        applyInboundForTicker(idx, book, cancelResults);
+        matchMarketOrdersForTicker(ticker, book, filledOrders, rejectedOrders);
+        matchLimitOrdersForTicker(ticker, book, filledOrders);
+
         enqueueFills(filledOrders);
+        enqueueRejections(rejectedOrders);
+        enqueueCancelResults(cancelResults);
+        enqueueDepthSnapshot(ticker, book.getDepth());
     }
 
-    void matchMarketOrders()
+    void processAllTickers()
     {
-        for (int i = 0; i < std::size(TICKERS); i++)
-        {
-            matchMarketOrdersForTicker(TICKERS[i]);
-        }
-    }
-
-    void matchLimitOrders()
-    {
-        for (int i = 0; i < std::size(TICKERS); i++)
-        {
-            matchLimitOrdersForTicker(TICKERS[i]);
-        }
-    }
-
-    void publishAllDepths(Redis &redis, const std::unordered_map<std::string, uint64_t> &tickerPrices)
-    {
-        for (int i = 0; i < std::size(TICKERS); i++)
-        {
-            const auto t = TICKERS[i];
-            auto [book, mutex] = getBookAndMutex(t);
-
-            DepthSnapshot snap;
-            {
-                std::lock_guard<std::mutex> lock(mutex);
-                snap = book.getDepth();
-            }
-
-            publishDepthForTicker(redis, t, snap, tickerPrices);
-        }
+        for (size_t i = 0; i < std::size(TICKERS); i++)
+            processTicker(i);
     }
 };
 
@@ -834,20 +967,11 @@ namespace OrderUtils
             throw std::runtime_error("Missing timestamp");
     }
 
-    void addOrderToBook(MatchingEngine &engine, const json &j)
+    void enqueueOrder(MatchingEngine &engine, const json &j)
     {
         validateJson(j);
         Order order(j);
-
-        if (order.orderType == OrderType::LIMIT)
-        {
-            engine.addLimitOrder(order);
-        }
-        else if (order.orderType == OrderType::MARKET)
-        {
-            engine.addMarketOrder(order);
-        }
-        // other order types here
+        engine.enqueueOrder(order);
     }
 
     void recoverFromRedis(MatchingEngine &engine, Redis &redis)
@@ -877,7 +1001,7 @@ namespace OrderUtils
             }
             // other order types here - not strictly necessary, just for counting each type recovered
 
-            addOrderToBook(engine, j);
+            enqueueOrder(engine, j);
         }
 
         std::cout << "recovered " << limitOrders << " limit orders and " << marketOrders << " market orders" << std::endl;
@@ -916,21 +1040,15 @@ int main()
                 using namespace OrderUtils;
                 
                 if (channel == "orders:new") {
-                    OrderUtils::addOrderToBook(engine, j);
+                    OrderUtils::enqueueOrder(engine, j);
                 }
                 else if (channel == "orders:cancel") {
-                    
-                    auto j = json::parse(msg);
-                    
                     uint64_t orderId = j["orderId"].get<uint64_t>();
+                    std::string userId = j.value("userId", "");
                     std::string ticker = j["ticker"].get<std::string>();
                     std::string side = j["side"].get<std::string>();
 
-                    // Call cancelOrder with the extracted values
-                    // change this to a cancel request object that returns success, orderId, userId?
-                    // otherwise i can't notify a user if their cancel went through or update their order from open to cancelled
-                    // check redis.js to see if I actually do that or not, prety sure i update database but no websocket
-                    bool cancelled = engine.cancelOrder(orderId, ticker, side);
+                    engine.enqueueCancellation(orderId, userId, ticker, side);
                 }
                 
             } catch (const std::exception& e) {
@@ -968,10 +1086,7 @@ int main()
       
         while (running) {
         
-            // process market orders first
-            engine.matchMarketOrders();
-            
-            engine.matchLimitOrders(); 
+            engine.processAllTickers();
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
        
         } });
@@ -1008,8 +1123,17 @@ int main()
             publisherRedis.publish("orders:rejected", batch.dump());
         }
 
-        
-        engine.publishAllDepths(publisherRedis, tickerPrices);
+        auto cancelResults = engine.drainCancelResults(1000);
+        if (cancelResults.size()){
+            json batch = json::array();
+            for (const auto& r : cancelResults) batch.push_back(r.toJson());
+            publisherRedis.publish("orders:cancelled", batch.dump());
+        }
+
+        auto depthUpdates = engine.drainDepthSnapshots(1000);
+        for (const auto& depth : depthUpdates) {
+            engine.publishDepthForTicker(publisherRedis, depth.ticker, depth.snapshot, tickerPrices);
+        }
     } });
 
     std::cout << "Matching engine running..." << std::endl;

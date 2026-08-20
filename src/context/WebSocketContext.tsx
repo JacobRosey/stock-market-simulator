@@ -14,6 +14,7 @@ import type {
     PortfolioUpdate,
     OrderFillUpdate,
     OrderRejectionUpdate,
+    OrderCancelFailedUpdate,
     ToastMessage,
     LeaderboardEntry,
     LeaderboardUpdate,
@@ -290,6 +291,18 @@ export const WebSocketProvider = () => {
             console.log(data)
             setUserOrders(prev => prev.filter(order => order.orderId !== data.orderId));
         })
+
+        newSocket.on('CANCEL_FAILED', (data: Omit<OrderCancelFailedUpdate, 'status'>) => {
+            enqueueToast({
+                orderId: data.orderId,
+                userId: data.userId,
+                ticker: data.ticker,
+                side: data.side,
+                reason: data.reason || 'Order could not be cancelled',
+                timestamp: data.timestamp,
+                status: 'CANCEL_FAILED',
+            });
+        });
 
         newSocket.on('ORDER_PLACED', (newOrder: Order) => {
             setUserOrders(prev => [newOrder, ...prev]);

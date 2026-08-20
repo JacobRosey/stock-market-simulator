@@ -21,7 +21,7 @@ export async function createRedisLayer({
 
     await subscriber.subscribe('orders:filled');
     await subscriber.subscribe('orders:rejected');
-    await subscriber.subscribe('orders:cancel');
+    await subscriber.subscribe('orders:cancelled');
 
     for (const ticker of tickers) {
         await subscriber.subscribe(`orders:depth:${ticker}`);
@@ -57,16 +57,51 @@ export async function createRedisLayer({
             }
         }
 
-        if (channel == "orders:cancel") {
+        if (channel == "orders:cancelled") {
             try {
-                const data = JSON.parse(message);
-                const canceledOrder = await cancelOrderInDatabase(data.orderId);
-                if (!canceledOrder) return;
+                const parsed = JSON.parse(message);
+                const cancelResults = Array.isArray(parsed) ? parsed : [parsed];
 
-                getBotManager()?.onOrderCanceled(data.orderId);
+                for (const data of cancelResults) {
+                    if (!data?.success) {
+                        getBotManager()?.onOrderCancelFailed?.(data);
 
-                const socket = userToSocket.get(canceledOrder.userId);
-                socket?.emit('CANCEL_UPDATE', canceledOrder);
+                        const socket = userToSocket.get(data.userId);
+                        socket?.emit('CANCEL_FAILED', {
+                            orderId: data.orderId,
+                            userId: data.userId,
+                            ticker: data.ticker,
+                            side: data.side,
+                            reason: data.reason || 'Order could not be cancelled',
+                            timestamp: data.timestamp
+                        });
+                        continue;
+                    }
+
+                    const canceledOrder = await cancelOrderInDatabase(data.orderId);
+                    if (!canceledOrder) {
+                        getBotManager()?.onOrderCancelFailed?.({
+                            ...data,
+                            reason: 'Order was not cancellable in database'
+                        });
+
+                        const socket = userToSocket.get(data.userId);
+                        socket?.emit('CANCEL_FAILED', {
+                            orderId: data.orderId,
+                            userId: data.userId,
+                            ticker: data.ticker,
+                            side: data.side,
+                            reason: 'Order was not cancellable in database',
+                            timestamp: data.timestamp
+                        });
+                        continue;
+                    }
+
+                    getBotManager()?.onOrderCanceled(data.orderId);
+
+                    const socket = userToSocket.get(canceledOrder.userId);
+                    socket?.emit('CANCEL_UPDATE', canceledOrder);
+                }
             } catch (e) {
                 console.error(e);
             }

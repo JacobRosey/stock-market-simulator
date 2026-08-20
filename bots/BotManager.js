@@ -1122,6 +1122,20 @@ export class BotManager {
         }
     }
 
+    onOrderCancelFailed(cancelResult) {
+        const orderId = cancelResult?.orderId;
+        if (!orderId) return;
+
+        const runtime = cancelResult.userId
+            ? this.byUserId.get(cancelResult.userId)
+            : this.runtimes.find((candidate) => candidate.openOrders.has(orderId));
+
+        const order = runtime?.openOrders.get(orderId);
+        if (order) {
+            order.cancelRequested = false;
+        }
+    }
+
     getPortfolios() {
         return this.runtimes.map((runtime) => runtime.getPortfolioSnapshot());
     }

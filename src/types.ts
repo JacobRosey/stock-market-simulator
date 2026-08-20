@@ -91,7 +91,17 @@ export interface OrderRejectionUpdate {
     status: 'REJECTED';
 }
 
-export type ToastMessage = OrderFillUpdate | OrderRejectionUpdate;
+export interface OrderCancelFailedUpdate {
+    orderId: number;
+    userId: string;
+    ticker: Ticker;
+    side: OrderSide;
+    reason: string;
+    timestamp: number;
+    status: 'CANCEL_FAILED';
+}
+
+export type ToastMessage = OrderFillUpdate | OrderRejectionUpdate | OrderCancelFailedUpdate;
 
 export const isOrderFillUpdate = (msg: ToastMessage): msg is OrderFillUpdate => {
     return msg.status === 'FILLED' || msg.status === 'PARTIALLY_FILLED';
