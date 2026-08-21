@@ -477,7 +477,7 @@ private:
     std::queue<FilledOrder> fillQueue;
     std::queue<RejectedOrder> rejectedQueue;
     std::queue<CancelledOrderResult> cancelResultQueue;
-    std::queue<DepthPublication> depthQueue;
+    std::array<std::optional<DepthPublication>, 20> pendingDepths;
     std::mutex fillMutex;
     std::condition_variable fillCV;
     std::mutex rejectedMutex;
@@ -592,10 +592,10 @@ public:
         }
     }
 
-    void enqueueDepthSnapshot(std::string ticker, DepthSnapshot snap)
+    void enqueueDepthSnapshot(size_t idx, std::string ticker, DepthSnapshot snap)
     {
         std::lock_guard<std::mutex> lock(depthMutex);
-        depthQueue.push({std::move(ticker), std::move(snap)});
+        pendingDepths[idx] = DepthPublication{std::move(ticker), std::move(snap)};
     }
 
     // Blocks until the we have maxBatch fills in fill queue or timeout, returns batch of filled orders
@@ -645,10 +645,16 @@ public:
         std::lock_guard<std::mutex> lock(depthMutex);
 
         std::vector<DepthPublication> batch;
-        while (!depthQueue.empty() && batch.size() < maxBatch)
+        for (auto &pendingDepth : pendingDepths)
         {
-            batch.push_back(std::move(depthQueue.front()));
-            depthQueue.pop();
+            if (!pendingDepth)
+                continue;
+
+            batch.push_back(std::move(*pendingDepth));
+            pendingDepth.reset();
+
+            if (batch.size() >= maxBatch)
+                break;
         }
         return batch;
     }
@@ -934,7 +940,7 @@ public:
         enqueueFills(filledOrders);
         enqueueRejections(rejectedOrders);
         enqueueCancelResults(cancelResults);
-        enqueueDepthSnapshot(ticker, book.getDepth());
+        enqueueDepthSnapshot(idx, ticker, book.getDepth());
     }
 
     void processAllTickers()
